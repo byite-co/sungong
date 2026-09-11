@@ -56,26 +56,21 @@ if (!['low', 'medium', 'high'].includes(MEDIA_RES)) {
   process.exit(1);
 }
 
-/* 파트별 media_resolution — 2026-09-11 실측: **값과 무관하게 미지원**.
-   ULTRA_HIGH 도 HIGH 도 똑같이 400 으로 거절된다:
+/* per-part media_resolution — 2026-09-11 측정으로 미지원 확정.
+   HIGH 도 ULTRA_HIGH 도 400 을 반환한다. 값 문제가 아니라 필드 자체가 미지원이다:
      Invalid value at 'contents[0].parts[0].media_resolution' ... "MEDIA_RESOLUTION_HIGH"
-     Invalid value at 'contents[0].parts[1].media_resolution' ...
-   처음엔 "필드는 인식되고 값만 거부됐다"고 읽었으나 틀렸다 —
-   gemini-3.1-flash-lite · Developer API(v1main) 에서 파트별 설정 자체가 동작하지 않는다.
-   ⚠️ 예산 증가는 파트별 설정이 아니라 **이미지를 여러 장 보내는 데서** 온다.
-      전역 generationConfig.mediaResolution 이 모든 이미지 파트에 적용되므로
-      조각 4개 = 페이지 1장의 약 4배 예산이 그대로 성립한다.
-   플래그는 지우지 않고 막는다 — Vertex 에서는 되살아날 수 있고, 그때 이 주석이 기준이 된다.
-   되살릴 때는 아래 차단을 풀고 요청 본문에 파트별 필드를 다시 넣어야 한다(지금은 넣지 않는다). */
+   "필드는 인식되고 값만 거부됨"이라는 앞선 판단은 HIGH 400 으로 반증됐다.
+   플래그는 남기고 막는다 — 출시 경로인 Vertex 에서 되살아날 수 있다.
+   근거와 미해결 항목: eval/notes/part_level_media_resolution.md
+   요청 바디에는 per-part 필드를 넣지 않는다(죽은 코드 방지). */
 const PART_MEDIA_RES = arg('part-media-res', null);
 if (PART_MEDIA_RES !== null) {
-  console.error('--part-media-res 는 현재 쓸 수 없습니다 — 파트별 media_resolution 이 값과 무관하게 미지원입니다.');
-  console.error('  2026-09-11 실측: ULTRA_HIGH·HIGH 모두 400');
-  console.error("    Invalid value at 'contents[0].parts[0].media_resolution'");
-  console.error('  대신 전역을 쓰세요: --media-res <low|medium|high>');
-  console.error('  (전역 설정은 모든 이미지 파트에 적용됩니다 — 조각 N개면 예산도 N배입니다)');
-  console.error('  ⚠️ Vertex 전환 시 재확인 필요 — 위는 Developer API(v1main) 기준입니다.');
-  process.exit(1);
+  console.error('--part-media-res 는 현재 지원되지 않습니다. ' +
+    'gemini-3.1-flash-lite / Developer API v1main 에서 per-part media_resolution 은 ' +
+    'HIGH·ULTRA_HIGH 모두 400 을 반환합니다(2026-09-11 측정). ' +
+    'Vertex AI 경로에서 재검증 전까지 사용 금지. ' +
+    '전역 --media-res 를 사용하세요.');
+  process.exit(2);
 }
 
 /* 프로브는 사진 1장이면 된다 — 본실험 전에 40회를 태우지 않는다 */
@@ -558,6 +553,8 @@ console.log(`\n저장: ${path.relative(process.cwd(), outFile)}`);
   }
 
   /* ── 파트별 mediaResolution 프로브 판정 ─────────────────────────────────
+     ⚠️ 현재 도달 불가 — PART_MEDIA_RES 가 주어지면 위에서 exit(2) 한다.
+     Vertex 재검증 때 차단을 풀면 그대로 다시 쓰인다.
      가장 위험한 결과는 4xx 가 아니라 "200 인데 조용히 무시" 다. 오류가 없으면
      적용됐다고 착각하기 때문에, 토큰으로만 판정하고 직렬화 여부를 따로 확인한다. */
   if (PART_MEDIA_RES) {

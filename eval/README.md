@@ -191,24 +191,16 @@ node report.mjs --run runs/<파일>.json   # 명시 지정
 
 ### 해상도 레버는 끝났다 (2026-09-11 실측)
 
+**해상도는 전역 `--media-res` 로만 제어. per-part 는 미지원(2026-09-11 측정).**
+
 문서 근거: https://ai.google.dev/gemini-api/docs/generate-content/media-resolution
 토큰 예산 LOW 280 · MEDIUM 560 · HIGH 1120 · ULTRA_HIGH 2240.
+전역에서 올릴 수 있는 최대가 HIGH 이므로 남은 레버는 **입력 형식(크롭)과 모델**뿐이다.
 
-- `ULTRA_HIGH` 는 **파트별 전용**이라 `generationConfig` 전역에는 넣을 수 없다.
-- 그런데 **파트별 `media_resolution` 자체가 값과 무관하게 미지원이다.**
-  ULTRA_HIGH 도 HIGH 도 똑같이 400 으로 거절된다:
-  `Invalid value at 'contents[0].parts[0].media_resolution'`
-  처음엔 "필드는 인식되고 값만 거부됐다"고 읽었으나 틀렸다 —
-  `gemini-3.1-flash-lite` · Developer API(v1main) 에서 파트별 경로가 동작하지 않는다.
-- 따라서 전역에서 올릴 수 있는 최대가 HIGH 이고, 남은 레버는 **입력 형식(크롭)과 모델**뿐이다.
+⚠️ 예산 증가는 per-part 설정이 아니라 **이미지를 여러 장 보내는 데서** 온다.
+전역 설정이 모든 이미지 파트에 적용되므로 조각 4개 = 페이지 1장의 약 4배가 그대로 성립한다.
 
-⚠️ **예산 증가는 파트별 설정이 아니라 이미지를 여러 장 보내는 데서 온다.**
-전역 `generationConfig.mediaResolution` 이 모든 이미지 파트에 적용되므로
-조각 4개 = 페이지 1장의 약 4배 예산이 그대로 성립한다. 파트별 지정은 필요 없다.
-
-⚠️ **Vertex 전환 시 재확인 필요** — 위는 Developer API(v1main) 기준이고 Vertex enum 은 다를 수 있다.
-`--part-media-res` 플래그는 지우지 않고 막아 두었다(`read.mjs`·`tools/crop_eval.mjs`).
-`_summary.json` 의 `part_level_media_resolution` 관측도 그대로 둔다 — 재확인할 때 쓴다.
+측정 기록과 Vertex 재측정 항목: `eval/notes/part_level_media_resolution.md`
 
 ### 라벨 정정이 프롬프트 순위를 바꾼 관측 (2026-09-11)
 
