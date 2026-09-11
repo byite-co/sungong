@@ -63,10 +63,12 @@ export function makeDumper({ enabled, outRoot, stamp }) {
       fs.writeFileSync(`${base}.request.json`,
         JSON.stringify({ url: ctx.url, headers, body: redactBody(ctx.body) }, null, 2));
 
-      const sentBuf = Buffer.from(ctx.base64, 'base64');
+      /* 텍스트 기준선처럼 이미지가 없는 요청은 복원할 것이 없다 */
+      const hasImage = !!ctx.base64;
+      const sentBuf = hasImage ? Buffer.from(ctx.base64, 'base64') : null;
       const ext = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' }[ctx.mediaType] || '.bin';
-      const sentPath = `${base}.sent${ext}`;
-      fs.writeFileSync(sentPath, sentBuf);
+      const sentPath = hasImage ? `${base}.sent${ext}` : null;
+      if (hasImage) fs.writeFileSync(sentPath, sentBuf);
 
       const srcBuf = ctx.sourcePath && fs.existsSync(ctx.sourcePath) ? fs.readFileSync(ctx.sourcePath) : null;
       const dim = async (p) => {
@@ -76,16 +78,16 @@ export function makeDumper({ enabled, outRoot, stamp }) {
       const row = {
         name,
         source: srcBuf ? { bytes: srcBuf.length, sha256: sha256(srcBuf), size: await dim(ctx.sourcePath) } : null,
-        sent: { bytes: sentBuf.length, sha256: sha256(sentBuf), size: await dim(sentPath) },
-        base64_chars: ctx.base64.length,
+        sent: hasImage ? { bytes: sentBuf.length, sha256: sha256(sentBuf), size: await dim(sentPath) } : null,
+        base64_chars: ctx.base64 ? ctx.base64.length : 0,
         media_resolution: ctx.body?.generationConfig?.mediaResolution ?? null,
         // 파트별 설정이 따로 붙어 있는지 — global 만인지 확인하기 위해 그대로 본다
         part_level_media_resolution: (ctx.body?.contents || [])
           .flatMap(c => c.parts || [])
           .map(p => p.mediaResolution ?? p.media_resolution ?? null)
           .filter(v => v !== null),
-        identical_to_source: srcBuf ? sha256(srcBuf) === sha256(sentBuf) : null,
-        sent_file: path.relative(dir, sentPath),
+        identical_to_source: srcBuf && sentBuf ? sha256(srcBuf) === sha256(sentBuf) : null,
+        sent_file: sentPath ? path.relative(dir, sentPath) : null,
       };
       rows.push(row);
       return row;
@@ -119,9 +121,9 @@ export function makeDumper({ enabled, outRoot, stamp }) {
       for (const r of rows) {
         console.log(
           w(r.name.slice(0, 25), 26) +
-          w(r.source?.bytes, 11) + w(r.sent.bytes, 11) +
+          w(r.source?.bytes, 11) + w(r.sent?.bytes, 11) +
           w(r.identical_to_source === null ? '-' : (r.identical_to_source ? 'yes' : 'NO'), 6) +
-          w(r.source?.size, 12) + w(r.sent.size, 12) +
+          w(r.source?.size, 12) + w(r.sent?.size, 12) +
           w(r.image_tokens, 9) + w(r.usage?.promptTokenCount, 11));
       }
       const noDetail = rows.some(r => r.usage && r.image_tokens === null);

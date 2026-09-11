@@ -9,6 +9,7 @@
  *          node read.mjs --provider anthropic --model claude-opus-5
  *          node read.mjs --dump-request --dry-run    # API 0회 — 전송 바이트만 감사 (가설 3)
  *          node read.mjs --dump-request              # 판독하면서 요청·응답 원본도 남긴다
+ *          node read.mjs --media-res high --text-baseline   # 해상도 비교 (변수 하나만 움직인다)
  *   필요:  GEMINI_API_KEY (⚠️ 반드시 유료 티어 키 — 무료 티어는 숙제 사진이 모델 학습에
  *          쓰여 프라이버시 약속(v3.1 §8-4)이 무너집니다) 또는 ANTHROPIC_API_KEY
  *
@@ -34,6 +35,14 @@ const PROVIDER   = arg('provider', 'gemini');
 const MODEL      = arg('model', PROVIDER === 'gemini' ? 'gemini-3.1-flash-lite' : 'claude-opus-5');
 const PROMPT_VER = arg('prompt', 'v2');
 const MEDIA_RES  = arg('media-res', 'medium');       // gemini 전용: low | medium | high
+/* 오타가 조용히 지나가면 "무엇으로 측정했는지"가 무너진다 — 실행 전에 막는다 */
+if (!['low', 'medium', 'high'].includes(MEDIA_RES)) {
+  console.error(`--media-res 는 low | medium | high 중 하나여야 합니다 (받은 값: ${MEDIA_RES})`);
+  process.exit(1);
+}
+/* --text-baseline: 같은 프롬프트를 이미지 없이 1회 호출해 텍스트 토큰 기준선을 잡는다.
+   promptTokenCount 에는 텍스트가 섞여 있어 그대로 "장당 이미지 토큰"으로 읽을 수 없다. */
+const TEXT_BASELINE = process.argv.includes('--text-baseline');
 const PHOTOS_DIR = path.resolve(here, arg('photos', 'photos'));
 /* --dump-request: 요청 본문·전송 이미지 바이트·응답 usage 원본을 requests/ 에 남긴다.
    --dry-run: API 를 호출하지 않는다. 둘을 같이 쓰면 가설 3 을 API 0회로 검증한다. */
@@ -345,6 +354,46 @@ async function callGemini(mediaType, data, spec, ctx = {}) {
 
 const CALL = { anthropic: callAnthropic, gemini: callGemini };
 
+/* 이미지 없이 같은 프롬프트만 보낸다 — generationConfig 는 그대로 둔다(변수 하나만). */
+async function geminiTextBaseline(spec, ctx = {}) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key && !ctx.dryRun) throw new Error('GEMINI_API_KEY 가 없습니다');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+  const body = {
+    contents: [{ parts: [{ text: spec.user }] }],
+    ...(spec.system ? { systemInstruction: { parts: [{ text: spec.system }] } } : {}),
+    generationConfig: {
+      temperature: 0,
+      maxOutputTokens: 8000,
+      mediaResolution: `MEDIA_RESOLUTION_${MEDIA_RES.toUpperCase()}`,
+      ...(spec.kind === 'observation-json'
+        ? { responseMimeType: 'application/json', responseSchema: V0_RESPONSE_SCHEMA }
+        : {}),
+    },
+  };
+  const headers = { 'content-type': 'application/json', 'x-goog-api-key': key };
+  if (ctx.dumper) await ctx.dumper.request('_text_baseline', {
+    url, headers, body, base64: '', mediaType: 'text/plain', sourcePath: null,
+  }, null);
+  if (ctx.dryRun) return null;
+  const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error(`텍스트 기준선 ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const res = await r.json();
+  if (ctx.dumper) ctx.dumper.response('_text_baseline', res);
+  return res.usageMetadata || {};
+}
+
+/* 이미지 토큰: 모달리티별 내역이 있으면 그것을, 없으면 텍스트 기준선을 뺀다. */
+function imageTokensOf(usage_raw, baselineTokens) {
+  const img = (usage_raw?.promptTokensDetails || [])
+    .find(d => String(d.modality).toUpperCase() === 'IMAGE');
+  if (img?.tokenCount != null) return { image_tokens: img.tokenCount, image_tokens_source: 'promptTokensDetails' };
+  if (baselineTokens != null && usage_raw?.promptTokenCount != null) {
+    return { image_tokens: usage_raw.promptTokenCount - baselineTokens, image_tokens_source: 'subtraction' };
+  }
+  return { image_tokens: null, image_tokens_source: null };
+}
+
 /* 직접 실행일 때만 판독을 돈다 — import 시(파서 테스트 등)는 아무것도 하지 않는다 */
 const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isDirectRun) {
@@ -371,6 +420,29 @@ const out = {
   created_at: new Date().toISOString(), photos: {},
 };
 
+/* 텍스트 기준선 — 사진 루프 전에 정확히 1회. 실패해도 판독은 계속한다. */
+let baselineTokens = null;
+if (TEXT_BASELINE) {
+  if (PROVIDER !== 'gemini') {
+    console.error('⚠️ --text-baseline 은 gemini 전용입니다 — 건너뜁니다');
+  } else {
+    try {
+      const u = await geminiTextBaseline(spec, { dumper, dryRun: DRY });
+      if (u) {
+        baselineTokens = u.promptTokenCount ?? null;
+        out.text_baseline_tokens = baselineTokens;
+        out.text_baseline_usage_raw = u;
+        console.log(`텍스트 기준선(이미지 없음): promptTokenCount = ${baselineTokens}`);
+      } else {
+        console.log('· 텍스트 기준선 — 호출 생략(--dry-run), 요청만 기록');
+      }
+    } catch (e) {
+      out.text_baseline_error = String(e.message || e);
+      console.error(`⚠️ 텍스트 기준선 실패: ${e.message || e} — 뺄셈 대신 promptTokensDetails 만 씁니다`);
+    }
+  }
+}
+
 for (const f of files) {
   const ext = path.extname(f).toLowerCase();
   const src = path.join(PHOTOS_DIR, f);
@@ -386,7 +458,7 @@ for (const f of files) {
       const { items, dropped } = parsed;
       out.photos[f] = {
         items, latency_ms, usage,
-        ...(usage_raw ? { usage_raw } : {}),
+        ...(usage_raw ? { usage_raw, ...imageTokensOf(usage_raw, baselineTokens) } : {}),
         dropped_lines: dropped.length,
         ...(dropped.length ? { dropped } : {}),
         ...(parsed.observation ? { observation: parsed.observation } : {}),
@@ -410,9 +482,22 @@ if (DRY) {
 }
 
 fs.mkdirSync(path.join(here, 'runs'), { recursive: true });
-const outFile = path.join(here, 'runs', `${stamp}-${MODEL}-${PROMPT_VER}.json`);
+const resTag = PROVIDER === 'gemini' ? `-${MEDIA_RES}` : '';
+const outFile = path.join(here, 'runs', `${stamp}-${MODEL}-${PROMPT_VER}${resTag}.json`);
 fs.writeFileSync(outFile, JSON.stringify(out, null, 2));
 console.log(`\n저장: ${path.relative(process.cwd(), outFile)}`);
+{
+  const rows = Object.entries(out.photos).filter(([, p]) => p.image_tokens != null);
+  if (rows.length) {
+    const src = [...new Set(rows.map(([, p]) => p.image_tokens_source))].join('/');
+    const vals = rows.map(([, p]) => p.image_tokens);
+    const sum = vals.reduce((a, b) => a + b, 0);
+    console.log(`이미지 토큰 (media_res=${MEDIA_RES}, 산출=${src}): ` +
+      `장당 최소 ${Math.min(...vals)} · 최대 ${Math.max(...vals)} · 평균 ${Math.round(sum / vals.length)}`);
+  } else if (TEXT_BASELINE) {
+    console.log('이미지 토큰을 산출하지 못했습니다 — promptTokensDetails 도 기준선도 없습니다.');
+  }
+}
 console.log('다음: node report.mjs           (방금 run 자동 선택 — 분포·이상 신호 확인)');
 console.log('      node measure.mjs --labels labels.json   (라벨이 있으면 게이트 채점)');
 
