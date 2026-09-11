@@ -178,23 +178,37 @@ node report.mjs --run runs/<파일>.json   # 명시 지정
 
 ## 원가 사다리 — 토큰당 정확도로도 비교할 것 (2026-09-11)
 
-파트별 mediaResolution 이 지원되면 선택지가 이렇게 늘어난다. 사진 1장당 입력 이미지 토큰
-(문서값 기준. 우리 실측은 이미지 비율 때문에 다소 낮게 나온다 — medium 540 · high 1064):
+사진 1장당 입력 이미지 토큰. **실제로 쓸 수 있는 것은 아래 두 줄뿐이다.**
 
-| 구성 | 장당 이미지 토큰 |
-|---|---:|
-| HIGH 전체 페이지 | 1120 |
-| ULTRA_HIGH 전체 페이지 | 2240 |
-| 크롭 4조각 × HIGH (한 요청에 묶음) | ~4480 |
-| 크롭 4조각 × ULTRA_HIGH | ~8960 |
+| 구성 | 장당 이미지 토큰 | 쓸 수 있나 |
+|---|---:|---|
+| HIGH 전체 페이지 | 1120 (실측 1064) | ✅ 현재 기본값 |
+| 크롭 4조각, 한 요청에 묶음 (전역 HIGH) | ~4480 | ✅ `tools/crop_eval.mjs` |
+| ULTRA_HIGH 전체 페이지 | 2240 | ⛔ 전역에 넣을 수 없다 |
+| 크롭 4조각 × ULTRA_HIGH | ~8960 | ⛔ 파트별 설정이 미지원 |
 
 **정확도만 보고 고르면 안 된다. 토큰당 정확도로도 비교한다** — 유료 판독의 원가가 여기서 갈린다.
 
+### 해상도 레버는 끝났다 (2026-09-11 실측)
+
 문서 근거: https://ai.google.dev/gemini-api/docs/generate-content/media-resolution
 토큰 예산 LOW 280 · MEDIUM 560 · HIGH 1120 · ULTRA_HIGH 2240.
-`ULTRA_HIGH` 는 **파트별 전용**이라 `generationConfig` 전역에는 넣을 수 없다.
-파트별 설정은 **Gemini 3 전용 · 실험적 기능**이고 Flash-Lite 지원 여부는 문서에 명시가 없다
-— 그래서 1회 프로브로 확인한다 (`--part-media-res`).
+
+- `ULTRA_HIGH` 는 **파트별 전용**이라 `generationConfig` 전역에는 넣을 수 없다.
+- 그런데 **파트별 `media_resolution` 자체가 값과 무관하게 미지원이다.**
+  ULTRA_HIGH 도 HIGH 도 똑같이 400 으로 거절된다:
+  `Invalid value at 'contents[0].parts[0].media_resolution'`
+  처음엔 "필드는 인식되고 값만 거부됐다"고 읽었으나 틀렸다 —
+  `gemini-3.1-flash-lite` · Developer API(v1main) 에서 파트별 경로가 동작하지 않는다.
+- 따라서 전역에서 올릴 수 있는 최대가 HIGH 이고, 남은 레버는 **입력 형식(크롭)과 모델**뿐이다.
+
+⚠️ **예산 증가는 파트별 설정이 아니라 이미지를 여러 장 보내는 데서 온다.**
+전역 `generationConfig.mediaResolution` 이 모든 이미지 파트에 적용되므로
+조각 4개 = 페이지 1장의 약 4배 예산이 그대로 성립한다. 파트별 지정은 필요 없다.
+
+⚠️ **Vertex 전환 시 재확인 필요** — 위는 Developer API(v1main) 기준이고 Vertex enum 은 다를 수 있다.
+`--part-media-res` 플래그는 지우지 않고 막아 두었다(`read.mjs`·`tools/crop_eval.mjs`).
+`_summary.json` 의 `part_level_media_resolution` 관측도 그대로 둔다 — 재확인할 때 쓴다.
 
 ### 라벨 정정이 프롬프트 순위를 바꾼 관측 (2026-09-11)
 

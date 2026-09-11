@@ -56,16 +56,28 @@ if (!['low', 'medium', 'high'].includes(MEDIA_RES)) {
   process.exit(1);
 }
 
-/* 파트별 mediaResolution — Gemini 3 전용 · 실험적 기능. Flash-Lite 지원 여부는
-   문서에 명시가 없어 1회 프로브로 확인한다. 전역 설정은 건드리지 않는다.
-   문서상 토큰 예산: LOW 280 · MEDIUM 560 · HIGH 1120 · ULTRA_HIGH 2240
-   우리 실측은 그보다 낮다(medium 540 · high 1064) — 이미지 비율 때문으로 보인다.
-   판정 기준은 절대값이 아니라 "HIGH 대비 약 2배로 올랐는가" 이다. */
+/* 파트별 media_resolution — 2026-09-11 실측: **값과 무관하게 미지원**.
+   ULTRA_HIGH 도 HIGH 도 똑같이 400 으로 거절된다:
+     Invalid value at 'contents[0].parts[0].media_resolution' ... "MEDIA_RESOLUTION_HIGH"
+     Invalid value at 'contents[0].parts[1].media_resolution' ...
+   처음엔 "필드는 인식되고 값만 거부됐다"고 읽었으나 틀렸다 —
+   gemini-3.1-flash-lite · Developer API(v1main) 에서 파트별 설정 자체가 동작하지 않는다.
+   ⚠️ 예산 증가는 파트별 설정이 아니라 **이미지를 여러 장 보내는 데서** 온다.
+      전역 generationConfig.mediaResolution 이 모든 이미지 파트에 적용되므로
+      조각 4개 = 페이지 1장의 약 4배 예산이 그대로 성립한다.
+   플래그는 지우지 않고 막는다 — Vertex 에서는 되살아날 수 있고, 그때 이 주석이 기준이 된다.
+   되살릴 때는 아래 차단을 풀고 요청 본문에 파트별 필드를 다시 넣어야 한다(지금은 넣지 않는다). */
 const PART_MEDIA_RES = arg('part-media-res', null);
-if (PART_MEDIA_RES && !['low', 'medium', 'high', 'ultra_high'].includes(PART_MEDIA_RES)) {
-  console.error(`--part-media-res 는 low | medium | high | ultra_high 중 하나여야 합니다 (받은 값: ${PART_MEDIA_RES})`);
+if (PART_MEDIA_RES !== null) {
+  console.error('--part-media-res 는 현재 쓸 수 없습니다 — 파트별 media_resolution 이 값과 무관하게 미지원입니다.');
+  console.error('  2026-09-11 실측: ULTRA_HIGH·HIGH 모두 400');
+  console.error("    Invalid value at 'contents[0].parts[0].media_resolution'");
+  console.error('  대신 전역을 쓰세요: --media-res <low|medium|high>');
+  console.error('  (전역 설정은 모든 이미지 파트에 적용됩니다 — 조각 N개면 예산도 N배입니다)');
+  console.error('  ⚠️ Vertex 전환 시 재확인 필요 — 위는 Developer API(v1main) 기준입니다.');
   process.exit(1);
 }
+
 /* 프로브는 사진 1장이면 된다 — 본실험 전에 40회를 태우지 않는다 */
 const LIMIT = Number(arg('limit', 0));
 /* 판정용 HIGH 기준선. 2026-09-11 실측 1064. --high-baseline 으로 바꿀 수 있다. */
@@ -338,16 +350,11 @@ async function callGemini(mediaType, data, spec, ctx = {}) {
   const key = process.env.GEMINI_API_KEY;
   if (!key && !ctx.dryRun) throw new Error('GEMINI_API_KEY 가 없습니다 (유료 티어 키만 사용할 것 — §8-4)');
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
-  /* 파트별 설정은 이미지 파트에만 붙인다. generationConfig 전역은 그대로 둔다 —
-     바뀌는 변수를 하나로 유지해야 결과를 귀속시킬 수 있다.
-     필드명은 camelCase — generationConfig.mediaResolution 이 그 표기로 실제 작동하는
-     것을 확인했으므로 같은 표기를 쓴다. 직렬화에서 빠지면 덤프의
-     part_level_media_resolution 이 빈 배열로 나와 바로 드러난다. */
-  const imagePart = { inline_data: { mime_type: mediaType, data } };
-  if (PART_MEDIA_RES) imagePart.mediaResolution = `MEDIA_RESOLUTION_${PART_MEDIA_RES.toUpperCase()}`;
+  /* 파트별 media_resolution 은 넣지 않는다 — 미지원(위 차단 주석 참조).
+     전역 generationConfig.mediaResolution 이 이미지 파트에 적용된다. */
   const body = {
     contents: [{ parts: [
-      imagePart,
+      { inline_data: { mime_type: mediaType, data } },
       { text: spec.user },
     ]}],
     ...(spec.system ? { systemInstruction: { parts: [{ text: spec.system }] } } : {}),

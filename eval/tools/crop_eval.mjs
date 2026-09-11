@@ -6,6 +6,9 @@
  *
  *   사진을 세로 N등분(기본 4)하고 위아래로 slice 높이의 15% 씩 겹치게 자른 뒤,
  *   ★ 한 사진의 조각 전부를 **한 요청에 묶어** 보낸다 — 10장이면 10회다.
+ *   예산 증가는 이미지를 여러 장 보내는 데서 온다 — 전역 generationConfig.mediaResolution
+ *   이 모든 이미지 파트에 적용되므로 조각 4개 = 페이지 1장의 약 4배다.
+ *   (파트별 media_resolution 은 미지원이다. --part-media-res 차단 주석 참조.)
  *   생산은 사진당 1회 호출이다. 조각마다 따로 호출해 얻은 정확도는 생산으로
  *   이전되지 않는다(요청당 비용·지연·문맥이 전부 다르다). 그래서 번들이 기본이다.
  *   진단용으로 조각별 귀속이 필요하면 --per-crop (40회) 을 쓰되, 그 수치는
@@ -22,8 +25,8 @@
  *     node tools/crop_eval.mjs --photos photos/test10 --dry-run   # 자르기만, API 0회
  *     node tools/crop_eval.mjs --dump-request --dry-run           # 조각 전송 바이트 감사, API 0회
  *     node tools/crop_eval.mjs --slices 4 --overlap 0.15
- *     node tools/crop_eval.mjs --part-media-res high              # 조각마다 파트별 HIGH 명시
  *     node tools/crop_eval.mjs --per-crop                         # 진단용 40회 (생산 후보 아님)
+ *     node tools/crop_eval.mjs --crops crops/2026-09-11T11-57-45  # 잘라 둔 조각 재사용
  *
  *   출력:
  *     crops/<ts>/<원본>__sIofN.jpg     조각 이미지 (파일명에 라벨 정보 없음)
@@ -57,18 +60,29 @@ const OVERLAP   = Number(arg('overlap', 0.15));
 const DRY       = has('dry-run');
 const DUMP      = has('dump-request');   // 요청 바이트·응답 usage 원본 (가설 3)
 const PER_CROP  = has('per-crop');       // 진단용: 조각마다 따로 호출(사진당 N회). 생산 후보 아님
-/* 파트별 media_resolution. 2026-09-11 프로브: 필드 경로는 존재하나 gemini-3.1-flash-lite
-   enum 에 ULTRA_HIGH 가 없어 400 거절 — ULTRA_HIGH 는 여기서도 쓸 수 없다.
-   HIGH 는 enum 에 있으므로 조각마다 명시할 수 있고, 그때 조각 4개 × HIGH 는
-   페이지 1장 × HIGH 의 4배 예산이 된다 — 이것이 크롭의 실제 메커니즘이다. */
+/* --crops <dir>: 이미 잘라 둔 조각을 재사용한다. 실패한 실행 뒤 다시 돌릴 때
+   같은 바이트로 보낸다는 보장이 생기고(덤프로 감사한 그 조각 그대로), 자르기 시간도 아낀다.
+   파일명 규칙(<원본>__sIofN.<ext>)으로 원본에 되붙이므로 --slices 가 같아야 한다. */
+const REUSE_CROPS = arg('crops', null);
+/* 파트별 media_resolution — 2026-09-11 실측: **값과 무관하게 미지원**.
+   ULTRA_HIGH 도 HIGH 도 똑같이 400 으로 거절된다:
+     Invalid value at 'contents[0].parts[0].media_resolution' ... "MEDIA_RESOLUTION_HIGH"
+     Invalid value at 'contents[0].parts[1].media_resolution' ...
+   처음엔 "필드는 인식되고 값만 거부됐다"고 읽었으나 틀렸다 —
+   gemini-3.1-flash-lite · Developer API(v1main) 에서 파트별 설정 자체가 동작하지 않는다.
+   ⚠️ 예산 증가는 파트별 설정이 아니라 **이미지를 여러 장 보내는 데서** 온다.
+      전역 generationConfig.mediaResolution 이 모든 이미지 파트에 적용되므로
+      조각 4개 = 페이지 1장의 약 4배 예산이 그대로 성립한다.
+   플래그는 지우지 않고 막는다 — Vertex 에서는 되살아날 수 있고, 그때 이 주석이 기준이 된다.
+   되살릴 때는 아래 차단을 풀고 요청 본문에 파트별 필드를 다시 넣어야 한다(지금은 넣지 않는다). */
 const PART_MEDIA_RES = arg('part-media-res', null);
-if (PART_MEDIA_RES === 'ultra_high') {
-  console.error('--part-media-res ultra_high 는 gemini-3.1-flash-lite 에서 400 으로 거절됩니다 (2026-09-11 프로브).');
-  console.error('  enum 에 ULTRA_HIGH 가 없습니다. low|medium|high 만 쓰세요.');
-  process.exit(1);
-}
-if (PART_MEDIA_RES && !['low', 'medium', 'high'].includes(PART_MEDIA_RES)) {
-  console.error(`--part-media-res 는 low | medium | high 중 하나여야 합니다 (받은 값: ${PART_MEDIA_RES})`);
+if (PART_MEDIA_RES !== null) {
+  console.error('--part-media-res 는 현재 쓸 수 없습니다 — 파트별 media_resolution 이 값과 무관하게 미지원입니다.');
+  console.error('  2026-09-11 실측: ULTRA_HIGH·HIGH 모두 400');
+  console.error("    Invalid value at 'contents[0].parts[0].media_resolution'");
+  console.error('  대신 전역을 쓰세요: --media-res <low|medium|high>');
+  console.error('  (전역 설정은 모든 이미지 파트에 적용됩니다 — 조각 N개면 예산도 N배입니다)');
+  console.error('  ⚠️ Vertex 전환 시 재확인 필요 — 위는 Developer API(v1main) 기준입니다.');
   process.exit(1);
 }
 const PHOTOS    = path.resolve(evalRoot, arg('photos', 'photos/test10'));
@@ -121,11 +135,8 @@ async function withRetry(fn) {
 
 /* 요청 본문 — 이미지 파트 여러 개 + 텍스트 프롬프트 하나. 번들·단건 모두 이걸 쓴다. */
 function buildBody(images) {
-  const parts = images.map(({ mediaType, data }) => {
-    const p = { inline_data: { mime_type: mediaType, data } };
-    if (PART_MEDIA_RES) p.media_resolution = `MEDIA_RESOLUTION_${PART_MEDIA_RES.toUpperCase()}`;
-    return p;
-  });
+  /* 파트별 media_resolution 은 넣지 않는다 — 미지원(위 차단 주석 참조). */
+  const parts = images.map(({ mediaType, data }) => ({ inline_data: { mime_type: mediaType, data } }));
   parts.push({ text: prompt });
   return {
     contents: [{ parts }],
@@ -182,8 +193,13 @@ async function main() {
   if (!files.length) { console.error(`사진이 없습니다: ${PHOTOS}`); process.exit(1); }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const cropDir = path.join(evalRoot, 'crops', stamp);
-  fs.mkdirSync(cropDir, { recursive: true });
+  const reuseDir = REUSE_CROPS ? path.resolve(evalRoot, REUSE_CROPS) : null;
+  if (reuseDir && !fs.existsSync(reuseDir)) {
+    console.error(`--crops 폴더가 없습니다: ${reuseDir}`); process.exit(1);
+  }
+  const cropDir = reuseDir || path.join(evalRoot, 'crops', stamp);
+  if (!reuseDir) fs.mkdirSync(cropDir, { recursive: true });
+  else console.log(`--crops: 잘라 둔 조각을 재사용합니다 — ${path.relative(process.cwd(), cropDir)}`);
   const dumper = makeDumper({ enabled: DUMP, outRoot: evalRoot, stamp });
 
   const out = {
@@ -195,6 +211,7 @@ async function main() {
       bundled: !PER_CROP,                       // true = 사진당 1회 (생산과 같은 호출 단위)
       calls_per_photo: PER_CROP ? SLICES : 1,
       crop_dir: path.relative(evalRoot, cropDir),
+      ...(reuseDir ? { reused_crops: true } : {}),
     },
     ...(PART_MEDIA_RES ? { part_media_res: PART_MEDIA_RES } : {}),
     photos: {},
@@ -207,12 +224,21 @@ async function main() {
     const boxes = sliceBoxes(meta.height);
     const ext = path.extname(f).toLowerCase();
 
-    /* 자르기는 항상 먼저. 호출 방식과 무관하게 조각 파일은 남는다(육안 확인용). */
+    /* 자르기는 항상 먼저. 호출 방식과 무관하게 조각 파일은 남는다(육안 확인용).
+       --crops 재사용이면 자르지 않고 기존 파일을 그대로 쓴다 — 같은 바이트가 보장된다. */
     const crops = [];
     for (const b of boxes) {
       const name = cropName(f, b.index, SLICES);
       const dst = path.join(cropDir, name);
-      await sharp(src).extract({ left: 0, top: b.top, width: meta.width, height: b.height }).toFile(dst);
+      if (reuseDir) {
+        if (!fs.existsSync(dst)) {
+          console.error(`--crops 에 조각이 없습니다: ${dst}`);
+          console.error('  --slices 가 자를 때와 같은지 확인하세요.');
+          process.exit(1);
+        }
+      } else {
+        await sharp(src).extract({ left: 0, top: b.top, width: meta.width, height: b.height }).toFile(dst);
+      }
       crops.push({ crop: name, path: dst, box: b, source_size: { width: meta.width, height: meta.height } });
     }
     const imagesOf = (recs) => recs.map(r => ({ mediaType: MEDIA[ext], data: fs.readFileSync(r.path).toString('base64') }));
