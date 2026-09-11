@@ -13,6 +13,7 @@
  *   사용:
  *     node tools/crop_eval.mjs --photos photos/test10
  *     node tools/crop_eval.mjs --photos photos/test10 --dry-run   # 자르기만, API 0회
+ *     node tools/crop_eval.mjs --dump-request --dry-run           # 조각 전송 바이트 감사, API 0회
  *     node tools/crop_eval.mjs --slices 4 --overlap 0.15
  *
  *   출력:
@@ -30,6 +31,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 import { PROMPTS, parseItems } from '../read.mjs';
+import { makeDumper } from './dump_request.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const evalRoot = path.resolve(here, '..');
@@ -42,6 +44,7 @@ const MEDIA_RES = arg('media-res', 'medium');
 const SLICES    = Number(arg('slices', 4));
 const OVERLAP   = Number(arg('overlap', 0.15));
 const DRY       = has('dry-run');
+const DUMP      = has('dump-request');   // 조각별 요청 바이트·응답 usage 원본 (가설 3)
 const PHOTOS    = path.resolve(evalRoot, arg('photos', 'photos/test10'));
 
 /* 프롬프트는 v2 고정. 이 도구는 프롬프트를 바꾸지 않는다 (15차 §4). */
@@ -90,7 +93,7 @@ async function withRetry(fn) {
   throw last;
 }
 
-async function callGemini(mediaType, data) {
+async function callGemini(mediaType, data, ctx = {}) {
   const key = process.env.GEMINI_API_KEY;
   if (!key) throw new Error('GEMINI_API_KEY 가 없습니다 (유료 티어 키만 — README §API 키)');
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
@@ -101,21 +104,22 @@ async function callGemini(mediaType, data) {
       mediaResolution: `MEDIA_RESOLUTION_${MEDIA_RES.toUpperCase()}`,
     },
   };
+  const headers = { 'content-type': 'application/json', 'x-goog-api-key': key };
+  if (ctx.dumper) await ctx.dumper.request(ctx.name, {
+    url, headers, body, base64: data, mediaType, sourcePath: ctx.sourcePath,
+  }, sharp);
   const res = await withRetry(async () => {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify(body),
-    });
+    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
     if (!r.ok) { const e = new Error(`Gemini ${r.status}: ${(await r.text()).slice(0, 300)}`); e.status = r.status; throw e; }
     return r.json();
   });
+  if (ctx.dumper) ctx.dumper.response(ctx.name, res);
   const text = (res.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
   const u = res.usageMetadata || {};
-  return { text, usage: { input_tokens: u.promptTokenCount ?? 0, output_tokens: u.candidatesTokenCount ?? 0 } };
+  return { text, usage: { input_tokens: u.promptTokenCount ?? 0, output_tokens: u.candidatesTokenCount ?? 0 }, usage_raw: u };
 }
 
-async function callAnthropic(mediaType, data) {
+async function callAnthropic(mediaType, data, ctx = {}) {
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
   callAnthropic.client ??= new Anthropic();
   const res = await withRetry(() => callAnthropic.client.messages.create({
@@ -141,6 +145,7 @@ async function main() {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const cropDir = path.join(evalRoot, 'crops', stamp);
   fs.mkdirSync(cropDir, { recursive: true });
+  const dumper = makeDumper({ enabled: DUMP, outRoot: evalRoot, stamp });
 
   const out = {
     provider: PROVIDER, model: MODEL, prompt_ver: PROMPT_VER,
@@ -167,13 +172,27 @@ async function main() {
       await sharp(src).extract({ left: 0, top: b.top, width: meta.width, height: b.height }).toFile(dst);
       const rec = { crop: name, box: b, source_size: { width: meta.width, height: meta.height } };
 
-      if (DRY) { crops.push(rec); continue; }
+      if (DRY && !DUMP) { crops.push(rec); continue; }
       const t0 = Date.now();
       try {
-        const { text, usage } = await CALL[PROVIDER](MEDIA[ext], fs.readFileSync(dst).toString('base64'));
+        const b64 = fs.readFileSync(dst).toString('base64');
+        if (DRY) {   // --dump-request 와 함께면 요청만 기록하고 호출하지 않는다
+          await dumper.request(name, {
+            url: `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+            headers: { 'content-type': 'application/json', 'x-goog-api-key': '<unused>' },
+            body: { contents: [{ parts: [{ inline_data: { mime_type: MEDIA[ext], data: b64 } }, { text: prompt }] }],
+                    generationConfig: { temperature: 0, maxOutputTokens: 8000,
+                      mediaResolution: `MEDIA_RESOLUTION_${MEDIA_RES.toUpperCase()}` } },
+            base64: b64, mediaType: MEDIA[ext], sourcePath: dst,
+          }, sharp);
+          crops.push(rec); continue;
+        }
+        const { text, usage, usage_raw } = await CALL[PROVIDER](MEDIA[ext], b64,
+          { name, sourcePath: dst, dumper });
         calls++;
         inTok += usage.input_tokens; outTok += usage.output_tokens;
         rec.latency_ms = Date.now() - t0; rec.usage = usage;
+        if (usage_raw) rec.usage_raw = usage_raw;
         const { items: its, dropped } = parseItems(text);
         rec.dropped_lines = dropped.length;
         if (dropped.length) rec.dropped = dropped;
@@ -215,6 +234,7 @@ async function main() {
     console.log(`${f} — 조각 ${boxes.length}, 문항 ${items.length}${d}`);
   }
 
+  if (dumper) dumper.writeSummary();
   fs.mkdirSync(path.join(evalRoot, 'runs'), { recursive: true });
   const outFile = path.join(evalRoot, 'runs', `${stamp}-${MODEL}-${PROMPT_VER}-crop${SLICES}.json`);
   fs.writeFileSync(outFile, JSON.stringify(out, null, 2));

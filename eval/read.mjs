@@ -7,6 +7,8 @@
  *   사용:  node read.mjs --photos photos                       # Gemini Flash-Lite (기본)
  *          node read.mjs --provider gemini --model gemini-3.1-flash-lite --media-res medium
  *          node read.mjs --provider anthropic --model claude-opus-5
+ *          node read.mjs --dump-request --dry-run    # API 0회 — 전송 바이트만 감사 (가설 3)
+ *          node read.mjs --dump-request              # 판독하면서 요청·응답 원본도 남긴다
  *   필요:  GEMINI_API_KEY (⚠️ 반드시 유료 티어 키 — 무료 티어는 숙제 사진이 모델 학습에
  *          쓰여 프라이버시 약속(v3.1 §8-4)이 무너집니다) 또는 ANTHROPIC_API_KEY
  *
@@ -19,6 +21,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { makeDumper } from './tools/dump_request.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const arg = (name, def) => {
@@ -32,6 +35,10 @@ const MODEL      = arg('model', PROVIDER === 'gemini' ? 'gemini-3.1-flash-lite' 
 const PROMPT_VER = arg('prompt', 'v2');
 const MEDIA_RES  = arg('media-res', 'medium');       // gemini 전용: low | medium | high
 const PHOTOS_DIR = path.resolve(here, arg('photos', 'photos'));
+/* --dump-request: 요청 본문·전송 이미지 바이트·응답 usage 원본을 requests/ 에 남긴다.
+   --dry-run: API 를 호출하지 않는다. 둘을 같이 쓰면 가설 3 을 API 0회로 검증한다. */
+const DUMP = process.argv.includes('--dump-request');
+const DRY  = process.argv.includes('--dry-run');
 
 /* 마크 6종 (v3.1 §4-4 정본) · work 3종 — 코드는 한 글자 */
 export const MARK_CODE = { c: 'circle', s: 'slash', t: 'triangle', q: 'question', k: 'check', u: 'unmarked' };
@@ -266,7 +273,7 @@ async function withRetry(fn) {
   throw last;
 }
 
-async function callAnthropic(mediaType, data, spec) {
+async function callAnthropic(mediaType, data, spec, ctx = {}) {
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
   callAnthropic.client ??= new Anthropic();
   const res = await withRetry(() => callAnthropic.client.messages.create({
@@ -288,9 +295,9 @@ async function callAnthropic(mediaType, data, spec) {
   };
 }
 
-async function callGemini(mediaType, data, spec) {
+async function callGemini(mediaType, data, spec, ctx = {}) {
   const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new Error('GEMINI_API_KEY 가 없습니다 (유료 티어 키만 사용할 것 — §8-4)');
+  if (!key && !ctx.dryRun) throw new Error('GEMINI_API_KEY 가 없습니다 (유료 티어 키만 사용할 것 — §8-4)');
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
   const body = {
     contents: [{ parts: [
@@ -308,12 +315,15 @@ async function callGemini(mediaType, data, spec) {
         : {}),
     },
   };
+  const headers = { 'content-type': 'application/json', 'x-goog-api-key': key };
+  /* 실제로 나가는 바이트를 그대로 기록한다 — 호출 직전이어야 의미가 있다 */
+  if (ctx.dumper) await ctx.dumper.request(ctx.name, {
+    url, headers, body, base64: data, mediaType, sourcePath: ctx.sourcePath,
+  }, ctx.sharp);
+  if (ctx.dryRun) return { text: null, usage: null, dryRun: true };
+
   const res = await withRetry(async () => {
-    const r = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
-      body: JSON.stringify(body),
-    });
+    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
     if (!r.ok) {
       const err = new Error(`Gemini ${r.status}: ${(await r.text()).slice(0, 300)}`);
       err.status = r.status;
@@ -321,9 +331,16 @@ async function callGemini(mediaType, data, spec) {
     }
     return r.json();
   });
+  if (ctx.dumper) ctx.dumper.response(ctx.name, res);
   const text = (res.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('');
   const u = res.usageMetadata || {};
-  return { text, usage: { input_tokens: u.promptTokenCount ?? 0, output_tokens: u.candidatesTokenCount ?? 0 } };
+  return {
+    text,
+    usage: { input_tokens: u.promptTokenCount ?? 0, output_tokens: u.candidatesTokenCount ?? 0 },
+    /* ★ 모달리티별 내역(promptTokensDetails)을 버리지 않는다 — "이미지에 몇 토큰이
+       배정됐나"는 promptTokenCount 로는 답이 안 나온다 (텍스트가 섞여 있다). */
+    usage_raw: u,
+  };
 }
 
 const CALL = { anthropic: callAnthropic, gemini: callGemini };
@@ -342,6 +359,12 @@ if (!fs.existsSync(PHOTOS_DIR)) { console.error(`사진 폴더가 없습니다: 
 const files = fs.readdirSync(PHOTOS_DIR).filter(f => MEDIA[path.extname(f).toLowerCase()]).sort();
 if (!files.length) { console.error(`사진이 없습니다: ${PHOTOS_DIR}`); process.exit(1); }
 
+const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+/* 해상도 대조는 sharp 이 있을 때만 — 없다고 감사를 막지는 않는다 */
+let sharp = null;
+if (DUMP) { try { ({ default: sharp } = await import('sharp')); } catch { /* optional */ } }
+const dumper = makeDumper({ enabled: DUMP, outRoot: here, stamp });
+
 const out = {
   provider: PROVIDER, model: MODEL, prompt_ver: PROMPT_VER,
   media_res: PROVIDER === 'gemini' ? MEDIA_RES : null,
@@ -350,16 +373,20 @@ const out = {
 
 for (const f of files) {
   const ext = path.extname(f).toLowerCase();
-  const data = fs.readFileSync(path.join(PHOTOS_DIR, f)).toString('base64');
+  const src = path.join(PHOTOS_DIR, f);
+  const data = fs.readFileSync(src).toString('base64');
   const t0 = Date.now();
   try {
-    const { text, usage } = await CALL[PROVIDER](MEDIA[ext], data, spec);
+    const { text, usage, usage_raw, dryRun } = await CALL[PROVIDER](MEDIA[ext], data, spec,
+      { name: f, sourcePath: src, dumper, sharp, dryRun: DRY });
     const latency_ms = Date.now() - t0;
+    if (dryRun) { console.log(`· ${f} — 호출 생략(--dry-run), 요청만 기록`); continue; }
     try {
       const parsed = spec.kind === 'observation-json' ? parseObservation(text) : parseItems(text);
       const { items, dropped } = parsed;
       out.photos[f] = {
         items, latency_ms, usage,
+        ...(usage_raw ? { usage_raw } : {}),
         dropped_lines: dropped.length,
         ...(dropped.length ? { dropped } : {}),
         ...(parsed.observation ? { observation: parsed.observation } : {}),
@@ -367,7 +394,7 @@ for (const f of files) {
       const warn = dropped.length ? `, ⚠️ 버린 줄 ${dropped.length}개` : '';
       console.log(`✓ ${f} — 문항 ${items.length}개${warn}, ${latency_ms}ms`);
     } catch (e) {
-      out.photos[f] = { error: `parse: ${e.message}`, raw: text, latency_ms, usage };
+      out.photos[f] = { error: `parse: ${e.message}`, raw: text, latency_ms, usage, ...(usage_raw ? { usage_raw } : {}) };
       console.log(`✗ ${f} — 응답 파싱 실패 (${e.message})`);
     }
   } catch (e) {
@@ -376,8 +403,13 @@ for (const f of files) {
   }
 }
 
+if (dumper) dumper.writeSummary();
+if (DRY) {
+  console.log(`\n--dry-run: API 를 호출하지 않았습니다. run JSON 은 만들지 않습니다.`);
+  process.exit(0);
+}
+
 fs.mkdirSync(path.join(here, 'runs'), { recursive: true });
-const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const outFile = path.join(here, 'runs', `${stamp}-${MODEL}-${PROMPT_VER}.json`);
 fs.writeFileSync(outFile, JSON.stringify(out, null, 2));
 console.log(`\n저장: ${path.relative(process.cwd(), outFile)}`);

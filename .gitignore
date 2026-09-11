@@ -6,6 +6,7 @@ dist/
 eval/photos/
 eval/runs/
 eval/crops/
+eval/requests/
 eval/tmp_*.mjs
 eval/tmp_diff_out.md
 eval/results/
