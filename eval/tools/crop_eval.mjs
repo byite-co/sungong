@@ -7,7 +7,8 @@
  *   사진을 세로 N등분(기본 4)하고 위아래로 slice 높이의 15% 씩 겹치게 잘라
  *   조각마다 1회씩 판독한다. 바뀌는 변수는 입력 형식 하나뿐이다:
  *     - 프롬프트: read.mjs 의 PROMPTS.v2 를 import 해서 그대로 쓴다 (사본 금지 — 드리프트 방지)
- *     - 모델·temperature·media_resolution: read.mjs 와 동일 기본값
+ *     - 모델·temperature·media_resolution(high): read.mjs 와 동일 기본값
+ *     - 비교 대상은 같은 high 의 전체 페이지 run 이다. medium 과 비교 금지
  *     - 조각당 정확히 1회 호출. 재시도는 429/5xx 전송 실패에만 (결과를 골라 담지 않는다)
  *
  *   사용:
@@ -40,7 +41,9 @@ const has = (n) => process.argv.includes(`--${n}`);
 
 const PROVIDER  = arg('provider', 'gemini');
 const MODEL     = arg('model', PROVIDER === 'gemini' ? 'gemini-3.1-flash-lite' : 'claude-opus-5');
-const MEDIA_RES = arg('media-res', 'medium');
+/* read.mjs 와 같은 기본값(high) — 크롭 실험은 전체 페이지 high run 과 비교한다.
+   medium 과 비교하면 해상도와 입력 형식 두 변수가 섞여 무효다 (2026-09-11 결정). */
+const MEDIA_RES = arg('media-res', 'high');
 const SLICES    = Number(arg('slices', 4));
 const OVERLAP   = Number(arg('overlap', 0.15));
 const DRY       = has('dry-run');

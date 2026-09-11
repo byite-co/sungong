@@ -9,13 +9,13 @@
  *          node read.mjs --provider anthropic --model claude-opus-5
  *          node read.mjs --dump-request --dry-run    # API 0회 — 전송 바이트만 감사 (가설 3)
  *          node read.mjs --dump-request              # 판독하면서 요청·응답 원본도 남긴다
- *          node read.mjs --media-res high --text-baseline   # 해상도 비교 (변수 하나만 움직인다)
+ *          node read.mjs --media-res medium --text-baseline # 과거 비교용 (기본값은 high)
  *   필요:  GEMINI_API_KEY (⚠️ 반드시 유료 티어 키 — 무료 티어는 숙제 사진이 모델 학습에
  *          쓰여 프라이버시 약속(v3.1 §8-4)이 무너집니다) 또는 ANTHROPIC_API_KEY
  *
  *   측정 원칙 (v3.1 §8-3):
  *   - temperature 0 — 샘플링 노이즈와 프롬프트 효과가 섞이면 개선 여부를 알 수 없다
- *   - media_resolution 명시 고정 — 기본값에 맡기면 실행마다 토큰이 달라진다
+ *   - media_resolution 명시 고정(기본 high) — 기본값에 맡기면 실행마다 토큰이 달라진다
  *   - 429/529 지수 백오프 — 한 번 실패로 사진을 영구 에러로 만들지 않는다
  *   - 출력은 압축 포맷 한 줄/문항 — 출력 단가가 입력의 4~8배다
  */
@@ -34,7 +34,15 @@ const PROVIDER   = arg('provider', 'gemini');
 // 기본 모델: 2.5 Flash-Lite 는 신규 사용자에게 404 로 막혀 있어(실측) 3.1 Flash-Lite 로 둔다
 const MODEL      = arg('model', PROVIDER === 'gemini' ? 'gemini-3.1-flash-lite' : 'claude-opus-5');
 const PROMPT_VER = arg('prompt', 'v2');
-const MEDIA_RES  = arg('media-res', 'medium');       // gemini 전용: low | medium | high
+/* 기본값 high — 2026-09-11 실측 결정. medium 에서는 이미지에 배정되는 토큰 예산이
+   모자라 얇은 획이 사라진다. 같은 사진·같은 프롬프트·같은 모델에서 이미지 토큰
+   540 → 1064, 결합 정확도 37.5% → 62.5% (고친 문항 13 · 새로 틀린 문항 3 ·
+   exact McNemar p=0.021), 세모 recall 0% → 40%, 560_17 이 1/5 → 5/5.
+   같은 날 medium 재실행이 2026-08-28 run 과 완전히 동일해(틀린 25문항 한 글자도
+   차이 없음) temperature 0 에서 이 파이프라인은 결정적이고 측정 잡음 바닥이 0 임을
+   확인했다 — 그래서 25%p 전부가 해상도 효과다.
+   ⛔ medium 수치를 새 측정과 섞어 인용하지 말 것. */
+const MEDIA_RES  = arg('media-res', 'high');         // gemini 전용: low | medium | high
 /* 오타가 조용히 지나가면 "무엇으로 측정했는지"가 무너진다 — 실행 전에 막는다 */
 if (!['low', 'medium', 'high'].includes(MEDIA_RES)) {
   console.error(`--media-res 는 low | medium | high 중 하나여야 합니다 (받은 값: ${MEDIA_RES})`);
