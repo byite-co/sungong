@@ -42,7 +42,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import sharp from 'sharp';
 import { PROMPTS, parseItems } from '../read.mjs';
 import { makeDumper } from './dump_request.mjs';
@@ -241,6 +241,7 @@ async function main() {
     const imagesOf = (recs) => recs.map(r => ({ mediaType: MEDIA[ext], data: fs.readFileSync(r.path).toString('base64') }));
 
     const items = [];
+    const raws = [];
     let inTok = 0, outTok = 0, err = null, dropped_lines = 0;
 
     /* 호출 단위: 기본은 사진 1회(번들), --per-crop 이면 조각마다 1회 */
@@ -263,6 +264,8 @@ async function main() {
       try {
         const { text, usage, usage_raw } = await CALL[PROVIDER](images, { name, sourcePath: g[0].path, dumper });
         calls++;
+        /* ★ 모델 원본 응답 — 파서를 거치기 전. read.mjs 와 같은 이유(2026-09-11). */
+        raws.push({ call: name, text });
         inTok += usage.input_tokens; outTok += usage.output_tokens;
         const { items: its, dropped } = parseItems(text);
         dropped_lines += dropped.length;
@@ -299,6 +302,7 @@ async function main() {
       }));
 
     out.photos[f] = {
+      raw: raws,                               // ★ 모델 원본 응답 (호출 단위)
       items,                                   // 중복 포함. 정책은 채점기가 정한다
       crops: crops.map(({ path: _p, ...rest }) => rest),
       dropped_lines,
@@ -360,5 +364,10 @@ function selfTest() {
   process.exit(fail ? 1 : 0);
 }
 
-if (has('self-test')) selfTest();
-else main().catch(e => { console.error(e); process.exit(1); });
+/* 직접 실행일 때만 돈다 — import 시(sliceBoxes·cropName 재사용)는 아무것도 하지 않는다.
+   read.mjs 와 같은 규율. 자르기 규칙을 사본이 아니라 import 로 공유하기 위해 필요하다. */
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isDirectRun) {
+  if (has('self-test')) selfTest();
+  else main().catch(e => { console.error(e); process.exit(1); });
+}

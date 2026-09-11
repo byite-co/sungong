@@ -498,6 +498,12 @@ for (const f of files) {
       const parsed = spec.kind === 'observation-json' ? parseObservation(text) : parseItems(text);
       const { items, dropped } = parsed;
       out.photos[f] = {
+        /* ★ 모델 원본 응답. 2026-09-11 이전에는 파싱 실패 시에만 저장해서, 파싱을 거친
+           결과밖에 남지 않았다 — "파서가 버린 것"과 "모델이 안 낸 것"을 구별할 수 없다.
+           work 실태 조사(B-2)가 바로 그 이유로 불가능했다. 이제 항상 남긴다.
+           ⚠️ raw 에는 지면 텍스트가 섞일 수 있다. eval/runs/ 는 gitignore 이고,
+              force-add 로 커밋하려면 raw 를 먼저 확인해야 한다. */
+        raw: text,
         items, latency_ms, usage,
         ...(usage_raw ? { usage_raw, ...imageTokensOf(usage_raw, baselineTokens) } : {}),
         dropped_lines: dropped.length,
