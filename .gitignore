@@ -13,3 +13,7 @@ eval/results/
 eval/dataset/
 tools/grade_eval/dataset/
 tools/grade_eval/results/
+
+eval/test1/
+eval/test10/
+eval/report*.html
