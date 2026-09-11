@@ -43,11 +43,33 @@ const PROMPT_VER = arg('prompt', 'v2');
    확인했다 — 그래서 25%p 전부가 해상도 효과다.
    ⛔ medium 수치를 새 측정과 섞어 인용하지 말 것. */
 const MEDIA_RES  = arg('media-res', 'high');         // gemini 전용: low | medium | high
-/* 오타가 조용히 지나가면 "무엇으로 측정했는지"가 무너진다 — 실행 전에 막는다 */
+/* 오타가 조용히 지나가면 "무엇으로 측정했는지"가 무너진다 — 실행 전에 막는다.
+   ultra_high 는 전역(generationConfig)에 넣을 수 없다 — 파트별 전용이다(공식 문서).
+   전역에 넣으면 거절되거나 조용히 무시되므로 여기서 막고 --part-media-res 로 보낸다. */
+if (MEDIA_RES === 'ultra_high' || MEDIA_RES === 'ultra-high') {
+  console.error('--media-res 에 ultra_high 는 쓸 수 없습니다 — 파트별 전용입니다.');
+  console.error('  --part-media-res ultra_high 를 쓰세요 (전역은 low|medium|high 유지).');
+  process.exit(1);
+}
 if (!['low', 'medium', 'high'].includes(MEDIA_RES)) {
   console.error(`--media-res 는 low | medium | high 중 하나여야 합니다 (받은 값: ${MEDIA_RES})`);
   process.exit(1);
 }
+
+/* 파트별 mediaResolution — Gemini 3 전용 · 실험적 기능. Flash-Lite 지원 여부는
+   문서에 명시가 없어 1회 프로브로 확인한다. 전역 설정은 건드리지 않는다.
+   문서상 토큰 예산: LOW 280 · MEDIUM 560 · HIGH 1120 · ULTRA_HIGH 2240
+   우리 실측은 그보다 낮다(medium 540 · high 1064) — 이미지 비율 때문으로 보인다.
+   판정 기준은 절대값이 아니라 "HIGH 대비 약 2배로 올랐는가" 이다. */
+const PART_MEDIA_RES = arg('part-media-res', null);
+if (PART_MEDIA_RES && !['low', 'medium', 'high', 'ultra_high'].includes(PART_MEDIA_RES)) {
+  console.error(`--part-media-res 는 low | medium | high | ultra_high 중 하나여야 합니다 (받은 값: ${PART_MEDIA_RES})`);
+  process.exit(1);
+}
+/* 프로브는 사진 1장이면 된다 — 본실험 전에 40회를 태우지 않는다 */
+const LIMIT = Number(arg('limit', 0));
+/* 판정용 HIGH 기준선. 2026-09-11 실측 1064. --high-baseline 으로 바꿀 수 있다. */
+const HIGH_BASELINE = Number(arg('high-baseline', 1064));
 /* --text-baseline: 같은 프롬프트를 이미지 없이 1회 호출해 텍스트 토큰 기준선을 잡는다.
    promptTokenCount 에는 텍스트가 섞여 있어 그대로 "장당 이미지 토큰"으로 읽을 수 없다. */
 const TEXT_BASELINE = process.argv.includes('--text-baseline');
@@ -316,9 +338,16 @@ async function callGemini(mediaType, data, spec, ctx = {}) {
   const key = process.env.GEMINI_API_KEY;
   if (!key && !ctx.dryRun) throw new Error('GEMINI_API_KEY 가 없습니다 (유료 티어 키만 사용할 것 — §8-4)');
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+  /* 파트별 설정은 이미지 파트에만 붙인다. generationConfig 전역은 그대로 둔다 —
+     바뀌는 변수를 하나로 유지해야 결과를 귀속시킬 수 있다.
+     필드명은 camelCase — generationConfig.mediaResolution 이 그 표기로 실제 작동하는
+     것을 확인했으므로 같은 표기를 쓴다. 직렬화에서 빠지면 덤프의
+     part_level_media_resolution 이 빈 배열로 나와 바로 드러난다. */
+  const imagePart = { inline_data: { mime_type: mediaType, data } };
+  if (PART_MEDIA_RES) imagePart.mediaResolution = `MEDIA_RESOLUTION_${PART_MEDIA_RES.toUpperCase()}`;
   const body = {
     contents: [{ parts: [
-      { inline_data: { mime_type: mediaType, data } },
+      imagePart,
       { text: spec.user },
     ]}],
     ...(spec.system ? { systemInstruction: { parts: [{ text: spec.system }] } } : {}),
@@ -413,8 +442,9 @@ const spec = typeof rawPrompt === 'string' ? { kind: 'compact-lines', user: rawP
 if (!CALL[PROVIDER]) { console.error(`알 수 없는 프로바이더: ${PROVIDER} (anthropic | gemini)`); process.exit(1); }
 if (!fs.existsSync(PHOTOS_DIR)) { console.error(`사진 폴더가 없습니다: ${PHOTOS_DIR}`); process.exit(1); }
 
-const files = fs.readdirSync(PHOTOS_DIR).filter(f => MEDIA[path.extname(f).toLowerCase()]).sort();
+let files = fs.readdirSync(PHOTOS_DIR).filter(f => MEDIA[path.extname(f).toLowerCase()]).sort();
 if (!files.length) { console.error(`사진이 없습니다: ${PHOTOS_DIR}`); process.exit(1); }
+if (LIMIT > 0) { files = files.slice(0, LIMIT); console.log(`--limit ${LIMIT}: ${files.join(', ')} 만 판독합니다`); }
 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 /* 해상도 대조는 sharp 이 있을 때만 — 없다고 감사를 막지는 않는다 */
@@ -425,6 +455,7 @@ const dumper = makeDumper({ enabled: DUMP, outRoot: here, stamp });
 const out = {
   provider: PROVIDER, model: MODEL, prompt_ver: PROMPT_VER,
   media_res: PROVIDER === 'gemini' ? MEDIA_RES : null,
+  ...(PART_MEDIA_RES ? { part_media_res: PART_MEDIA_RES } : {}),
   created_at: new Date().toISOString(), photos: {},
 };
 
@@ -504,6 +535,43 @@ console.log(`\n저장: ${path.relative(process.cwd(), outFile)}`);
       `장당 최소 ${Math.min(...vals)} · 최대 ${Math.max(...vals)} · 평균 ${Math.round(sum / vals.length)}`);
   } else if (TEXT_BASELINE) {
     console.log('이미지 토큰을 산출하지 못했습니다 — promptTokensDetails 도 기준선도 없습니다.');
+  }
+
+  /* ── 파트별 mediaResolution 프로브 판정 ─────────────────────────────────
+     가장 위험한 결과는 4xx 가 아니라 "200 인데 조용히 무시" 다. 오류가 없으면
+     적용됐다고 착각하기 때문에, 토큰으로만 판정하고 직렬화 여부를 따로 확인한다. */
+  if (PART_MEDIA_RES) {
+    console.log(`\n=== 파트별 mediaResolution 프로브 판정 (요청값 ${PART_MEDIA_RES.toUpperCase()}) ===`);
+    const sent = (dumper?.rows || []).flatMap(r => r.part_level_media_resolution || []);
+    if (dumper) {
+      console.log(sent.length
+        ? `  직렬화 확인: 요청에 실려 나감 ${JSON.stringify([...new Set(sent)])}`
+        : `  ⛔ 직렬화 단계에서 빠졌습니다 — part_level_media_resolution 이 빈 배열입니다.`
+          + `\n     필드명이 거부됐다는 뜻이며, 아래 토큰 판정은 의미가 없습니다.`);
+    } else {
+      console.log('  (--dump-request 없이 실행해 직렬화 여부를 확인하지 못했습니다 — 프로브에는 필수입니다)');
+    }
+    const errs = Object.entries(out.photos).filter(([, p]) => p.error);
+    if (errs.length) {
+      console.log(`  판정: ⛔ 거절 — ${errs[0][1].error}`);
+      console.log('        이 모델·API 버전에서 미지원입니다. 중단하고 보고하세요.');
+    } else if (!rows.length) {
+      console.log('  판정: 이미지 토큰을 못 구했습니다 — --text-baseline 을 함께 쓰거나 usage_raw 를 확인하세요.');
+    } else {
+      const vals = rows.map(([, p]) => p.image_tokens);
+      const avg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+      const ratio = avg / HIGH_BASELINE;
+      console.log(`  이미지 토큰 평균 ${avg} · HIGH 기준선 ${HIGH_BASELINE} · 비율 ${ratio.toFixed(2)}배`);
+      if (ratio >= 1.8) {
+        console.log('  판정: ✅ 적용됨 (HIGH 대비 약 2배). 본실험으로 진행하세요.');
+      } else if (Math.abs(avg - HIGH_BASELINE) / HIGH_BASELINE <= 0.1) {
+        console.log('  판정: ⛔ 조용한 대체 — 설정이 무시됐습니다. 미지원과 같게 취급하세요.');
+      } else {
+        console.log('  판정: ❔ 그 외 — 위 값을 그대로 보고하세요. 총괄이 판단합니다.');
+      }
+      console.log('  (참고 문서값 LOW 280 · MEDIUM 560 · HIGH 1120 · ULTRA_HIGH 2240 /'
+        + ' 우리 실측 medium 540 · high 1064 — 절대값이 아니라 배수로 판정한다)');
+    }
   }
 }
 console.log('다음: node report.mjs           (방금 run 자동 선택 — 분포·이상 신호 확인)');

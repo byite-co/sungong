@@ -47,6 +47,7 @@ export function makeDumper({ enabled, outRoot, stamp }) {
 
   return {
     dir,
+    rows,   // 호출부가 직렬화 결과를 직접 확인할 수 있게 노출한다
     /**
      * @param name    산출물 접두어 (보통 사진/조각 파일명)
      * @param ctx     { url, headers, body, base64, mediaType, sourcePath }
