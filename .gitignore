@@ -17,3 +17,13 @@ tools/grade_eval/results/
 eval/test1/
 eval/test10/
 eval/report*.html
+
+# ★ 확장자 단위 방어 — 폴더 규칙은 폴더 이름이 바뀌면 뚫린다.
+# 실제로 eval/test1/·eval/test10/ 에 지면 사진이 추적도 무시도 안 된 채 있었다(공개 저장소).
+# 위 폴더 규칙과 중복돼도 무해하다. 평가셋 이미지는 어떤 경로에 있든 커밋되지 않는다.
+eval/**/*.jpg
+eval/**/*.jpeg
+eval/**/*.png
+eval/**/*.heic
+eval/**/*.heif
+eval/**/*.webp

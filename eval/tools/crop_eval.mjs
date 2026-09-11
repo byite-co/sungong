@@ -4,18 +4,26 @@
  *   가설: 모델이 기호를 못 읽는 게 아니라, 페이지 전체에서 세부를 못 보거나
  *         번호와 기호를 잘못 연결한다.
  *
- *   사진을 세로 N등분(기본 4)하고 위아래로 slice 높이의 15% 씩 겹치게 잘라
- *   조각마다 1회씩 판독한다. 바뀌는 변수는 입력 형식 하나뿐이다:
+ *   사진을 세로 N등분(기본 4)하고 위아래로 slice 높이의 15% 씩 겹치게 자른 뒤,
+ *   ★ 한 사진의 조각 전부를 **한 요청에 묶어** 보낸다 — 10장이면 10회다.
+ *   생산은 사진당 1회 호출이다. 조각마다 따로 호출해 얻은 정확도는 생산으로
+ *   이전되지 않는다(요청당 비용·지연·문맥이 전부 다르다). 그래서 번들이 기본이다.
+ *   진단용으로 조각별 귀속이 필요하면 --per-crop (40회) 을 쓰되, 그 수치는
+ *   생산 후보가 아니다.
+ *
+ *   바뀌는 변수는 입력 형식 하나뿐이다:
  *     - 프롬프트: read.mjs 의 PROMPTS.v2 를 import 해서 그대로 쓴다 (사본 금지 — 드리프트 방지)
  *     - 모델·temperature·media_resolution(high): read.mjs 와 동일 기본값
  *     - 비교 대상은 같은 high 의 전체 페이지 run 이다. medium 과 비교 금지
- *     - 조각당 정확히 1회 호출. 재시도는 429/5xx 전송 실패에만 (결과를 골라 담지 않는다)
+ *     - 사진당 정확히 1회 호출. 재시도는 429/5xx 전송 실패에만 (결과를 골라 담지 않는다)
  *
  *   사용:
  *     node tools/crop_eval.mjs --photos photos/test10
  *     node tools/crop_eval.mjs --photos photos/test10 --dry-run   # 자르기만, API 0회
  *     node tools/crop_eval.mjs --dump-request --dry-run           # 조각 전송 바이트 감사, API 0회
  *     node tools/crop_eval.mjs --slices 4 --overlap 0.15
+ *     node tools/crop_eval.mjs --part-media-res high              # 조각마다 파트별 HIGH 명시
+ *     node tools/crop_eval.mjs --per-crop                         # 진단용 40회 (생산 후보 아님)
  *
  *   출력:
  *     crops/<ts>/<원본>__sIofN.jpg     조각 이미지 (파일명에 라벨 정보 없음)
@@ -47,7 +55,22 @@ const MEDIA_RES = arg('media-res', 'high');
 const SLICES    = Number(arg('slices', 4));
 const OVERLAP   = Number(arg('overlap', 0.15));
 const DRY       = has('dry-run');
-const DUMP      = has('dump-request');   // 조각별 요청 바이트·응답 usage 원본 (가설 3)
+const DUMP      = has('dump-request');   // 요청 바이트·응답 usage 원본 (가설 3)
+const PER_CROP  = has('per-crop');       // 진단용: 조각마다 따로 호출(사진당 N회). 생산 후보 아님
+/* 파트별 media_resolution. 2026-09-11 프로브: 필드 경로는 존재하나 gemini-3.1-flash-lite
+   enum 에 ULTRA_HIGH 가 없어 400 거절 — ULTRA_HIGH 는 여기서도 쓸 수 없다.
+   HIGH 는 enum 에 있으므로 조각마다 명시할 수 있고, 그때 조각 4개 × HIGH 는
+   페이지 1장 × HIGH 의 4배 예산이 된다 — 이것이 크롭의 실제 메커니즘이다. */
+const PART_MEDIA_RES = arg('part-media-res', null);
+if (PART_MEDIA_RES === 'ultra_high') {
+  console.error('--part-media-res ultra_high 는 gemini-3.1-flash-lite 에서 400 으로 거절됩니다 (2026-09-11 프로브).');
+  console.error('  enum 에 ULTRA_HIGH 가 없습니다. low|medium|high 만 쓰세요.');
+  process.exit(1);
+}
+if (PART_MEDIA_RES && !['low', 'medium', 'high'].includes(PART_MEDIA_RES)) {
+  console.error(`--part-media-res 는 low | medium | high 중 하나여야 합니다 (받은 값: ${PART_MEDIA_RES})`);
+  process.exit(1);
+}
 const PHOTOS    = path.resolve(evalRoot, arg('photos', 'photos/test10'));
 
 /* 프롬프트는 v2 고정. 이 도구는 프롬프트를 바꾸지 않는다 (15차 §4). */
@@ -96,20 +119,32 @@ async function withRetry(fn) {
   throw last;
 }
 
-async function callGemini(mediaType, data, ctx = {}) {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new Error('GEMINI_API_KEY 가 없습니다 (유료 티어 키만 — README §API 키)');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
-  const body = {
-    contents: [{ parts: [{ inline_data: { mime_type: mediaType, data } }, { text: prompt }] }],
+/* 요청 본문 — 이미지 파트 여러 개 + 텍스트 프롬프트 하나. 번들·단건 모두 이걸 쓴다. */
+function buildBody(images) {
+  const parts = images.map(({ mediaType, data }) => {
+    const p = { inline_data: { mime_type: mediaType, data } };
+    if (PART_MEDIA_RES) p.media_resolution = `MEDIA_RESOLUTION_${PART_MEDIA_RES.toUpperCase()}`;
+    return p;
+  });
+  parts.push({ text: prompt });
+  return {
+    contents: [{ parts }],
     generationConfig: {
       temperature: 0, maxOutputTokens: 8000,
       mediaResolution: `MEDIA_RESOLUTION_${MEDIA_RES.toUpperCase()}`,
     },
   };
+}
+
+async function callGemini(images, ctx = {}) {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error('GEMINI_API_KEY 가 없습니다 (유료 티어 키만 — README §API 키)');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+  const body = buildBody(images);
   const headers = { 'content-type': 'application/json', 'x-goog-api-key': key };
   if (ctx.dumper) await ctx.dumper.request(ctx.name, {
-    url, headers, body, base64: data, mediaType, sourcePath: ctx.sourcePath,
+    url, headers, body, base64: images[0].data, mediaType: images[0].mediaType,
+    sourcePath: ctx.sourcePath,
   }, sharp);
   const res = await withRetry(async () => {
     const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
@@ -122,13 +157,14 @@ async function callGemini(mediaType, data, ctx = {}) {
   return { text, usage: { input_tokens: u.promptTokenCount ?? 0, output_tokens: u.candidatesTokenCount ?? 0 }, usage_raw: u };
 }
 
-async function callAnthropic(mediaType, data, ctx = {}) {
+async function callAnthropic(images, ctx = {}) {
   const { default: Anthropic } = await import('@anthropic-ai/sdk');
   callAnthropic.client ??= new Anthropic();
   const res = await withRetry(() => callAnthropic.client.messages.create({
     model: MODEL, max_tokens: 8000, temperature: 0,
     messages: [{ role: 'user', content: [
-      { type: 'image', source: { type: 'base64', media_type: mediaType, data } },
+      ...images.map(({ mediaType, data }) =>
+        ({ type: 'image', source: { type: 'base64', media_type: mediaType, data } })),
       { type: 'text', text: prompt },
     ] }],
   }));
@@ -154,7 +190,13 @@ async function main() {
     provider: PROVIDER, model: MODEL, prompt_ver: PROMPT_VER,
     media_res: PROVIDER === 'gemini' ? MEDIA_RES : null,
     created_at: new Date().toISOString(),
-    input_form: { kind: 'vertical-crop', slices: SLICES, overlap: OVERLAP, crop_dir: path.relative(evalRoot, cropDir) },
+    input_form: {
+      kind: 'vertical-crop', slices: SLICES, overlap: OVERLAP,
+      bundled: !PER_CROP,                       // true = 사진당 1회 (생산과 같은 호출 단위)
+      calls_per_photo: PER_CROP ? SLICES : 1,
+      crop_dir: path.relative(evalRoot, cropDir),
+    },
+    ...(PART_MEDIA_RES ? { part_media_res: PART_MEDIA_RES } : {}),
     photos: {},
   };
 
@@ -165,53 +207,60 @@ async function main() {
     const boxes = sliceBoxes(meta.height);
     const ext = path.extname(f).toLowerCase();
 
-    const items = [];
+    /* 자르기는 항상 먼저. 호출 방식과 무관하게 조각 파일은 남는다(육안 확인용). */
     const crops = [];
-    let inTok = 0, outTok = 0, err = null;
-
     for (const b of boxes) {
       const name = cropName(f, b.index, SLICES);
       const dst = path.join(cropDir, name);
       await sharp(src).extract({ left: 0, top: b.top, width: meta.width, height: b.height }).toFile(dst);
-      const rec = { crop: name, box: b, source_size: { width: meta.width, height: meta.height } };
+      crops.push({ crop: name, path: dst, box: b, source_size: { width: meta.width, height: meta.height } });
+    }
+    const imagesOf = (recs) => recs.map(r => ({ mediaType: MEDIA[ext], data: fs.readFileSync(r.path).toString('base64') }));
 
-      if (DRY && !DUMP) { crops.push(rec); continue; }
+    const items = [];
+    let inTok = 0, outTok = 0, err = null, dropped_lines = 0;
+
+    /* 호출 단위: 기본은 사진 1회(번들), --per-crop 이면 조각마다 1회 */
+    const groups = PER_CROP ? crops.map(c => [c]) : [crops];
+    for (const g of groups) {
+      const name = PER_CROP ? g[0].crop : f;
+      const images = imagesOf(g);
       const t0 = Date.now();
+
+      if (DRY) {
+        if (DUMP) await dumper.request(name, {
+          url: `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+          headers: { 'content-type': 'application/json', 'x-goog-api-key': '<unused>' },
+          body: buildBody(images),
+          base64: images[0].data, mediaType: MEDIA[ext], sourcePath: g[0].path,
+        }, sharp);
+        continue;
+      }
+
       try {
-        const b64 = fs.readFileSync(dst).toString('base64');
-        if (DRY) {   // --dump-request 와 함께면 요청만 기록하고 호출하지 않는다
-          await dumper.request(name, {
-            url: `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-            headers: { 'content-type': 'application/json', 'x-goog-api-key': '<unused>' },
-            body: { contents: [{ parts: [{ inline_data: { mime_type: MEDIA[ext], data: b64 } }, { text: prompt }] }],
-                    generationConfig: { temperature: 0, maxOutputTokens: 8000,
-                      mediaResolution: `MEDIA_RESOLUTION_${MEDIA_RES.toUpperCase()}` } },
-            base64: b64, mediaType: MEDIA[ext], sourcePath: dst,
-          }, sharp);
-          crops.push(rec); continue;
-        }
-        const { text, usage, usage_raw } = await CALL[PROVIDER](MEDIA[ext], b64,
-          { name, sourcePath: dst, dumper });
+        const { text, usage, usage_raw } = await CALL[PROVIDER](images, { name, sourcePath: g[0].path, dumper });
         calls++;
         inTok += usage.input_tokens; outTok += usage.output_tokens;
-        rec.latency_ms = Date.now() - t0; rec.usage = usage;
-        if (usage_raw) rec.usage_raw = usage_raw;
         const { items: its, dropped } = parseItems(text);
-        rec.dropped_lines = dropped.length;
-        if (dropped.length) rec.dropped = dropped;
-        for (const it of its) items.push({ ...it, from_crop: b.index });
-        rec.items = its.length;
-        console.log(`  ✓ ${name} — 문항 ${its.length}개${dropped.length ? `, ⚠️ 버린 줄 ${dropped.length}` : ''}, ${rec.latency_ms}ms`);
+        dropped_lines += dropped.length;
+        for (const it of its) items.push(PER_CROP ? { ...it, from_crop: g[0].box.index } : { ...it });
+        for (const c of g) { c.latency_ms = Date.now() - t0; c.usage = usage; if (usage_raw) c.usage_raw = usage_raw; }
+        if (dropped.length) g[0].dropped = dropped;
+        console.log(`  ✓ ${name} — 조각 ${g.length}장 한 요청, 문항 ${its.length}개` +
+                    `${dropped.length ? `, ⚠️ 버린 줄 ${dropped.length}` : ''}, ${Date.now() - t0}ms`);
       } catch (e) {
         calls++;
-        rec.error = String(e.message || e); rec.latency_ms = Date.now() - t0;
-        err = err || rec.error;
-        console.log(`  ✗ ${name} — ${rec.error}`);
+        err = err || String(e.message || e);
+        for (const c of g) { c.error = String(e.message || e); c.latency_ms = Date.now() - t0; }
+        console.log(`  ✗ ${name} — ${e.message || e}`);
       }
-      crops.push(rec);
     }
 
-    /* 겹침으로 같은 번호가 두 조각에서 나온 경우 — 지우지 않고 census 만 적는다 */
+    /* 같은 번호가 두 번 나온 경우 — 지우지 않고 census 만 적는다.
+       번들에서는 모델이 조각 4장을 한꺼번에 보므로 스스로 한 번만 낼 수도 있고,
+       겹침 구간을 두 번 셀 수도 있다. 어느 쪽인지가 이 census 로 드러난다.
+       ⚠️ 번들에서는 어느 조각에서 나온 값인지 귀속할 수 없다(출력에 조각 표시가 없다).
+          귀속이 필요하면 --per-crop 으로 따로 봐야 한다. */
     const seen = new Map();
     for (const it of items) {
       if (!seen.has(it.item_no)) seen.set(it.item_no, []);
@@ -220,26 +269,38 @@ async function main() {
     const dupes = [...seen.entries()].filter(([, v]) => v.length > 1)
       .map(([no, v]) => ({
         item_no: no,
-        occurrences: v.map(x => ({ from_crop: x.from_crop, mark: x.mark, work: x.work,
+        occurrences: v.map(x => ({ ...(x.from_crop ? { from_crop: x.from_crop } : {}),
+                                   mark: x.mark, work: x.work,
                                    mark_confidence: x.mark_confidence, work_confidence: x.work_confidence })),
         agree: new Set(v.map(x => x.mark)).size === 1 && new Set(v.map(x => x.work)).size === 1,
       }));
 
     out.photos[f] = {
       items,                                   // 중복 포함. 정책은 채점기가 정한다
-      crops,
-      dropped_lines: crops.reduce((a, c) => a + (c.dropped_lines || 0), 0),
+      crops: crops.map(({ path: _p, ...rest }) => rest),
+      dropped_lines,
       crop_duplicates: dupes,
       usage: { input_tokens: inTok, output_tokens: outTok },
       ...(err && !items.length ? { error: err } : {}),
     };
     const d = dupes.length ? `, 겹침 중복 ${dupes.length}문항(불일치 ${dupes.filter(x => !x.agree).length})` : '';
-    console.log(`${f} — 조각 ${boxes.length}, 문항 ${items.length}${d}`);
+    console.log(`${f} — 조각 ${boxes.length}, 호출 ${groups.length}, 문항 ${items.length}${d}`);
   }
 
   if (dumper) dumper.writeSummary();
+  /* 사진이 전부 실패한 run 은 저장하지 않는다 — 빈 run 파일이 진짜 run 과 헷갈린다 */
+  const anyItems = Object.values(out.photos).some(p => (p.items || []).length);
+  if (!DRY && !anyItems) {
+    console.log('\n⛔ 모든 사진이 실패했습니다 — run JSON 을 저장하지 않습니다.');
+    console.log(`   조각 이미지는 남아 있습니다: ${path.relative(process.cwd(), cropDir)}`);
+    if (dumper) console.log(`   요청·응답 원본: ${path.relative(process.cwd(), dumper.dir)}`);
+    process.exit(1);
+  }
   fs.mkdirSync(path.join(evalRoot, 'runs'), { recursive: true });
-  const outFile = path.join(evalRoot, 'runs', `${stamp}-${MODEL}-${PROMPT_VER}-crop${SLICES}.json`);
+  /* 파일명에 설정을 전부 넣는다 — 실패한 프로브 run 이 진짜 run 과 헷갈린 전례가 있다 */
+  const tags = [`crop${SLICES}`, MEDIA_RES, ...(PART_MEDIA_RES ? [`part_${PART_MEDIA_RES}`] : []),
+                ...(PER_CROP ? ['percrop'] : [])];
+  const outFile = path.join(evalRoot, 'runs', `${stamp}-${MODEL}-${PROMPT_VER}-${tags.join('-')}.json`);
   fs.writeFileSync(outFile, JSON.stringify(out, null, 2));
 
   const allDupes = Object.values(out.photos).flatMap(p => p.crop_duplicates || []);

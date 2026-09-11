@@ -520,9 +520,22 @@ if (DRY) {
   process.exit(0);
 }
 
+/* 사진이 전부 실패한 run 은 저장하지 않는다 — 실패한 ULTRA_HIGH 프로브가 문항 0개짜리
+   '-high' 파일을 남겨 진짜 high run 과 헷갈린 전례가 있다 (2026-09-11). */
+if (!Object.values(out.photos).some(p => (p.items || []).length)) {
+  console.log('\n⛔ 모든 사진이 실패했습니다 — run JSON 을 저장하지 않습니다.');
+  for (const [f, p] of Object.entries(out.photos)) if (p.error) console.log(`   ${f} — ${p.error}`);
+  if (dumper) console.log(`   요청·응답 원본: ${path.relative(process.cwd(), dumper.dir)}`);
+  process.exit(1);
+}
+
 fs.mkdirSync(path.join(here, 'runs'), { recursive: true });
-const resTag = PROVIDER === 'gemini' ? `-${MEDIA_RES}` : '';
-const outFile = path.join(here, 'runs', `${stamp}-${MODEL}-${PROMPT_VER}${resTag}.json`);
+/* 파일명에 설정을 전부 넣는다 — 설정이 다른 run 끼리 헷갈리지 않게 */
+const tags = PROVIDER === 'gemini'
+  ? [MEDIA_RES, ...(PART_MEDIA_RES ? [`part_${PART_MEDIA_RES}`] : [])]
+  : [];
+const outFile = path.join(here, 'runs',
+  `${stamp}-${MODEL}-${PROMPT_VER}${tags.length ? '-' + tags.join('-') : ''}.json`);
 fs.writeFileSync(outFile, JSON.stringify(out, null, 2));
 console.log(`\n저장: ${path.relative(process.cwd(), outFile)}`);
 {
