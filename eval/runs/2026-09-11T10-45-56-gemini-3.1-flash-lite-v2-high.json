@@ -1,0 +1,582 @@
+{
+  "provider": "gemini",
+  "model": "gemini-3.1-flash-lite",
+  "prompt_ver": "v2",
+  "media_res": "high",
+  "created_at": "2026-09-11T10:45:56.748Z",
+  "photos": {
+    "KakaoTalk_20260828_103948878.jpg": {
+      "items": [
+        {
+          "item_no": 17,
+          "mark": "circle",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 18,
+          "mark": "question",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 19,
+          "mark": "slash",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 20,
+          "mark": "triangle",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        }
+      ],
+      "latency_ms": 8489,
+      "usage": {
+        "input_tokens": 1571,
+        "output_tokens": 59
+      },
+      "usage_raw": {
+        "promptTokenCount": 1571,
+        "candidatesTokenCount": 59,
+        "totalTokenCount": 1630,
+        "promptTokensDetails": [
+          {
+            "modality": "IMAGE",
+            "tokenCount": 1064
+          },
+          {
+            "modality": "TEXT",
+            "tokenCount": 507
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "image_tokens": 1064,
+      "image_tokens_source": "promptTokensDetails",
+      "dropped_lines": 0
+    },
+    "KakaoTalk_20260828_103948878_05.jpg": {
+      "items": [
+        {
+          "item_no": 27,
+          "mark": "circle",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 28,
+          "mark": "unmarked",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        }
+      ],
+      "latency_ms": 7227,
+      "usage": {
+        "input_tokens": 1571,
+        "output_tokens": 29
+      },
+      "usage_raw": {
+        "promptTokenCount": 1571,
+        "candidatesTokenCount": 29,
+        "totalTokenCount": 1600,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 507
+          },
+          {
+            "modality": "IMAGE",
+            "tokenCount": 1064
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "image_tokens": 1064,
+      "image_tokens_source": "promptTokensDetails",
+      "dropped_lines": 0
+    },
+    "KakaoTalk_20260828_103948878_19.jpg": {
+      "items": [
+        {
+          "item_no": 28,
+          "mark": "circle",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 29,
+          "mark": "question",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        }
+      ],
+      "latency_ms": 4052,
+      "usage": {
+        "input_tokens": 1571,
+        "output_tokens": 29
+      },
+      "usage_raw": {
+        "promptTokenCount": 1571,
+        "candidatesTokenCount": 29,
+        "totalTokenCount": 1600,
+        "promptTokensDetails": [
+          {
+            "modality": "IMAGE",
+            "tokenCount": 1064
+          },
+          {
+            "modality": "TEXT",
+            "tokenCount": 507
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "image_tokens": 1064,
+      "image_tokens_source": "promptTokensDetails",
+      "dropped_lines": 0
+    },
+    "KakaoTalk_20260828_103957188_07.jpg": {
+      "items": [
+        {
+          "item_no": 5,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 6,
+          "mark": "slash",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 7,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 8,
+          "mark": "slash",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 9,
+          "mark": "unmarked",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        }
+      ],
+      "latency_ms": 6157,
+      "usage": {
+        "input_tokens": 1571,
+        "output_tokens": 69
+      },
+      "usage_raw": {
+        "promptTokenCount": 1571,
+        "candidatesTokenCount": 69,
+        "totalTokenCount": 1640,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 507
+          },
+          {
+            "modality": "IMAGE",
+            "tokenCount": 1064
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "image_tokens": 1064,
+      "image_tokens_source": "promptTokensDetails",
+      "dropped_lines": 0
+    },
+    "KakaoTalk_20260828_103957188_13.jpg": {
+      "items": [
+        {
+          "item_no": 6,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 7,
+          "mark": "slash",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 8,
+          "mark": "slash",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 9,
+          "mark": "unmarked",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 10,
+          "mark": "circle",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        }
+      ],
+      "latency_ms": 6923,
+      "usage": {
+        "input_tokens": 1571,
+        "output_tokens": 70
+      },
+      "usage_raw": {
+        "promptTokenCount": 1571,
+        "candidatesTokenCount": 70,
+        "totalTokenCount": 1641,
+        "promptTokensDetails": [
+          {
+            "modality": "IMAGE",
+            "tokenCount": 1064
+          },
+          {
+            "modality": "TEXT",
+            "tokenCount": 507
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "image_tokens": 1064,
+      "image_tokens_source": "promptTokensDetails",
+      "dropped_lines": 0
+    },
+    "KakaoTalk_20260828_103957188_18.png": {
+      "items": [
+        {
+          "item_no": 17,
+          "mark": "question",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 18,
+          "mark": "triangle",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 19,
+          "mark": "circle",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 20,
+          "mark": "triangle",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        }
+      ],
+      "latency_ms": 3749,
+      "usage": {
+        "input_tokens": 1587,
+        "output_tokens": 59
+      },
+      "usage_raw": {
+        "promptTokenCount": 1587,
+        "candidatesTokenCount": 59,
+        "totalTokenCount": 1646,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 507
+          },
+          {
+            "modality": "IMAGE",
+            "tokenCount": 1080
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "image_tokens": 1080,
+      "image_tokens_source": "promptTokensDetails",
+      "dropped_lines": 0
+    },
+    "KakaoTalk_20260828_104006560_05.jpg": {
+      "items": [
+        {
+          "item_no": 17,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 18,
+          "mark": "question",
+          "work": "solved",
+          "mark_confidence": 0.9,
+          "work_confidence": 0.9
+        },
+        {
+          "item_no": 19,
+          "mark": "triangle",
+          "work": "solved",
+          "mark_confidence": 0.9,
+          "work_confidence": 0.9
+        },
+        {
+          "item_no": 20,
+          "mark": "triangle",
+          "work": "solved",
+          "mark_confidence": 0.9,
+          "work_confidence": 0.9
+        }
+      ],
+      "latency_ms": 6749,
+      "usage": {
+        "input_tokens": 1571,
+        "output_tokens": 53
+      },
+      "usage_raw": {
+        "promptTokenCount": 1571,
+        "candidatesTokenCount": 53,
+        "totalTokenCount": 1624,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 507
+          },
+          {
+            "modality": "IMAGE",
+            "tokenCount": 1064
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "image_tokens": 1064,
+      "image_tokens_source": "promptTokensDetails",
+      "dropped_lines": 0
+    },
+    "KakaoTalk_20260828_104006560_17.jpg": {
+      "items": [
+        {
+          "item_no": 22,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 23,
+          "mark": "question",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 24,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 25,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 26,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        }
+      ],
+      "latency_ms": 8053,
+      "usage": {
+        "input_tokens": 1571,
+        "output_tokens": 74
+      },
+      "usage_raw": {
+        "promptTokenCount": 1571,
+        "candidatesTokenCount": 74,
+        "totalTokenCount": 1645,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 507
+          },
+          {
+            "modality": "IMAGE",
+            "tokenCount": 1064
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "image_tokens": 1064,
+      "image_tokens_source": "promptTokensDetails",
+      "dropped_lines": 0
+    },
+    "KakaoTalk_20260828_104006560_27.jpg": {
+      "items": [
+        {
+          "item_no": 6,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 7,
+          "mark": "triangle",
+          "work": "solved",
+          "mark_confidence": 0.95,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 8,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 9,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 10,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 11,
+          "mark": "circle",
+          "work": "solved",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        }
+      ],
+      "latency_ms": 4969,
+      "usage": {
+        "input_tokens": 1571,
+        "output_tokens": 84
+      },
+      "usage_raw": {
+        "promptTokenCount": 1571,
+        "candidatesTokenCount": 84,
+        "totalTokenCount": 1655,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 507
+          },
+          {
+            "modality": "IMAGE",
+            "tokenCount": 1064
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "image_tokens": 1064,
+      "image_tokens_source": "promptTokensDetails",
+      "dropped_lines": 0
+    },
+    "KakaoTalk_20260828_104014695_14.jpg": {
+      "items": [
+        {
+          "item_no": 43,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 44,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        },
+        {
+          "item_no": 45,
+          "mark": "circle",
+          "work": "blank",
+          "mark_confidence": 1,
+          "work_confidence": 1
+        }
+      ],
+      "latency_ms": 6273,
+      "usage": {
+        "input_tokens": 1571,
+        "output_tokens": 44
+      },
+      "usage_raw": {
+        "promptTokenCount": 1571,
+        "candidatesTokenCount": 44,
+        "totalTokenCount": 1615,
+        "promptTokensDetails": [
+          {
+            "modality": "IMAGE",
+            "tokenCount": 1064
+          },
+          {
+            "modality": "TEXT",
+            "tokenCount": 507
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "image_tokens": 1064,
+      "image_tokens_source": "promptTokensDetails",
+      "dropped_lines": 0
+    }
+  },
+  "text_baseline_tokens": 507,
+  "text_baseline_usage_raw": {
+    "promptTokenCount": 507,
+    "candidatesTokenCount": 26,
+    "totalTokenCount": 533,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 507
+      }
+    ],
+    "serviceTier": "standard"
+  }
+}
