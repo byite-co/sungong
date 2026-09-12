@@ -21,6 +21,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { makeDumper } from './tools/dump_request.mjs';
 
@@ -484,6 +485,12 @@ if (TEXT_BASELINE) {
   }
 }
 
+/* ★ 모델 원본 응답은 run JSON 에 넣지 않고 형제 파일 runs/<run>.raw.json 으로 뺀다.
+   run JSON 에는 포인터(raw_file·raw_sha256)만 남는다.
+   이유: raw 에는 지면 텍스트가 섞일 수 있다. run JSON 을 git add -f 로 커밋하는 일이
+   있어도 raw 는 구조적으로 따라가지 않는다(.gitignore 의 eval/runs/*.raw.json). */
+const rawStore = {};
+
 for (const f of files) {
   const ext = path.extname(f).toLowerCase();
   const src = path.join(PHOTOS_DIR, f);
@@ -494,16 +501,11 @@ for (const f of files) {
       { name: f, sourcePath: src, dumper, sharp, dryRun: DRY });
     const latency_ms = Date.now() - t0;
     if (dryRun) { console.log(`· ${f} — 호출 생략(--dry-run), 요청만 기록`); continue; }
+    rawStore[f] = text;                      // 성공·실패(파싱 실패) 모두 원문을 남긴다
     try {
       const parsed = spec.kind === 'observation-json' ? parseObservation(text) : parseItems(text);
       const { items, dropped } = parsed;
       out.photos[f] = {
-        /* ★ 모델 원본 응답. 2026-09-11 이전에는 파싱 실패 시에만 저장해서, 파싱을 거친
-           결과밖에 남지 않았다 — "파서가 버린 것"과 "모델이 안 낸 것"을 구별할 수 없다.
-           work 실태 조사(B-2)가 바로 그 이유로 불가능했다. 이제 항상 남긴다.
-           ⚠️ raw 에는 지면 텍스트가 섞일 수 있다. eval/runs/ 는 gitignore 이고,
-              force-add 로 커밋하려면 raw 를 먼저 확인해야 한다. */
-        raw: text,
         items, latency_ms, usage,
         ...(usage_raw ? { usage_raw, ...imageTokensOf(usage_raw, baselineTokens) } : {}),
         dropped_lines: dropped.length,
@@ -513,11 +515,12 @@ for (const f of files) {
       const warn = dropped.length ? `, ⚠️ 버린 줄 ${dropped.length}개` : '';
       console.log(`✓ ${f} — 문항 ${items.length}개${warn}, ${latency_ms}ms`);
     } catch (e) {
-      out.photos[f] = { error: `parse: ${e.message}`, raw: text, latency_ms, usage, ...(usage_raw ? { usage_raw } : {}) };
+      out.photos[f] = { error: `parse: ${e.message}`, latency_ms, usage, ...(usage_raw ? { usage_raw } : {}) };
       console.log(`✗ ${f} — 응답 파싱 실패 (${e.message})`);
     }
   } catch (e) {
     out.photos[f] = { error: String(e.message || e), latency_ms: Date.now() - t0 };
+    rawStore[f] = { error: String(e.message || e) };   // 응답이 없으면 오류를 남긴다
     console.log(`✗ ${f} — API 오류: ${e.message || e}`);
   }
 }
@@ -526,6 +529,24 @@ if (dumper) dumper.writeSummary();
 if (DRY) {
   console.log(`\n--dry-run: API 를 호출하지 않았습니다. run JSON 은 만들지 않습니다.`);
   process.exit(0);
+}
+
+fs.mkdirSync(path.join(here, 'runs'), { recursive: true });
+/* 파일명에 설정을 전부 넣는다 — 설정이 다른 run 끼리 헷갈리지 않게 */
+const tags = PROVIDER === 'gemini'
+  ? [MEDIA_RES, ...(PART_MEDIA_RES ? [`part_${PART_MEDIA_RES}`] : [])]
+  : [];
+const runName = `${stamp}-${MODEL}-${PROMPT_VER}${tags.length ? '-' + tags.join('-') : ''}`;
+const outFile = path.join(here, 'runs', `${runName}.json`);
+
+/* 원본 응답 — 형제 파일. run JSON 보다 먼저 쓰고 sha256 을 포인터로 넣는다. */
+if (Object.keys(rawStore).length) {
+  const rawPath = path.join(here, 'runs', `${runName}.raw.json`);
+  const rawText = JSON.stringify({ run: runName, created_at: out.created_at, responses: rawStore }, null, 2);
+  fs.writeFileSync(rawPath, rawText);
+  out.raw_file = `${runName}.raw.json`;
+  out.raw_sha256 = crypto.createHash('sha256').update(rawText).digest('hex');
+  console.log(`원본 응답: ${path.relative(process.cwd(), rawPath)}  (커밋 대상 아님 — .gitignore)`);
 }
 
 /* 사진이 전부 실패한 run 은 저장하지 않는다 — 실패한 ULTRA_HIGH 프로브가 문항 0개짜리
@@ -537,13 +558,6 @@ if (!Object.values(out.photos).some(p => (p.items || []).length)) {
   process.exit(1);
 }
 
-fs.mkdirSync(path.join(here, 'runs'), { recursive: true });
-/* 파일명에 설정을 전부 넣는다 — 설정이 다른 run 끼리 헷갈리지 않게 */
-const tags = PROVIDER === 'gemini'
-  ? [MEDIA_RES, ...(PART_MEDIA_RES ? [`part_${PART_MEDIA_RES}`] : [])]
-  : [];
-const outFile = path.join(here, 'runs',
-  `${stamp}-${MODEL}-${PROMPT_VER}${tags.length ? '-' + tags.join('-') : ''}.json`);
 fs.writeFileSync(outFile, JSON.stringify(out, null, 2));
 console.log(`\n저장: ${path.relative(process.cwd(), outFile)}`);
 {

@@ -42,6 +42,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import sharp from 'sharp';
 import { PROMPTS, parseItems } from '../read.mjs';
@@ -214,6 +215,9 @@ async function main() {
     photos: {},
   };
 
+  /* ★ 모델 원본 응답은 run JSON 이 아니라 형제 파일 runs/<run>.raw.json 으로 뺀다.
+     run JSON 에는 포인터(raw_file·raw_sha256)만 남는다 — read.mjs 와 같은 규율. */
+  const rawStore = {};
   let calls = 0;
   for (const f of files) {
     const src = path.join(PHOTOS, f);
@@ -241,7 +245,7 @@ async function main() {
     const imagesOf = (recs) => recs.map(r => ({ mediaType: MEDIA[ext], data: fs.readFileSync(r.path).toString('base64') }));
 
     const items = [];
-    const raws = [];
+    const raws = [];                           // 이 사진의 호출별 원문 — rawStore 로 옮긴다
     let inTok = 0, outTok = 0, err = null, dropped_lines = 0;
 
     /* 호출 단위: 기본은 사진 1회(번들), --per-crop 이면 조각마다 1회 */
@@ -264,8 +268,7 @@ async function main() {
       try {
         const { text, usage, usage_raw } = await CALL[PROVIDER](images, { name, sourcePath: g[0].path, dumper });
         calls++;
-        /* ★ 모델 원본 응답 — 파서를 거치기 전. read.mjs 와 같은 이유(2026-09-11). */
-        raws.push({ call: name, text });
+        raws.push({ call: name, text });      // 파서를 거치기 전 원문
         inTok += usage.input_tokens; outTok += usage.output_tokens;
         const { items: its, dropped } = parseItems(text);
         dropped_lines += dropped.length;
@@ -276,6 +279,7 @@ async function main() {
                     `${dropped.length ? `, ⚠️ 버린 줄 ${dropped.length}` : ''}, ${Date.now() - t0}ms`);
       } catch (e) {
         calls++;
+        raws.push({ call: name, error: String(e.message || e) });
         err = err || String(e.message || e);
         for (const c of g) { c.error = String(e.message || e); c.latency_ms = Date.now() - t0; }
         console.log(`  ✗ ${name} — ${e.message || e}`);
@@ -302,7 +306,6 @@ async function main() {
       }));
 
     out.photos[f] = {
-      raw: raws,                               // ★ 모델 원본 응답 (호출 단위)
       items,                                   // 중복 포함. 정책은 채점기가 정한다
       crops: crops.map(({ path: _p, ...rest }) => rest),
       dropped_lines,
@@ -310,11 +313,29 @@ async function main() {
       usage: { input_tokens: inTok, output_tokens: outTok },
       ...(err && !items.length ? { error: err } : {}),
     };
+    if (raws.length) rawStore[f] = raws;
     const d = dupes.length ? `, 겹침 중복 ${dupes.length}문항(불일치 ${dupes.filter(x => !x.agree).length})` : '';
     console.log(`${f} — 조각 ${boxes.length}, 호출 ${groups.length}, 문항 ${items.length}${d}`);
   }
 
   if (dumper) dumper.writeSummary();
+  fs.mkdirSync(path.join(evalRoot, 'runs'), { recursive: true });
+  /* 파일명에 설정을 전부 넣는다 — 실패한 프로브 run 이 진짜 run 과 헷갈린 전례가 있다 */
+  const tags = [`crop${SLICES}`, MEDIA_RES, ...(PART_MEDIA_RES ? [`part_${PART_MEDIA_RES}`] : []),
+                ...(PER_CROP ? ['percrop'] : [])];
+  const runName = `${stamp}-${MODEL}-${PROMPT_VER}-${tags.join('-')}`;
+  const outFile = path.join(evalRoot, 'runs', `${runName}.json`);
+
+  /* 원본 응답 — 형제 파일. run JSON 보다 먼저 쓰고 sha256 을 포인터로 넣는다. */
+  if (Object.keys(rawStore).length) {
+    const rawPath = path.join(evalRoot, 'runs', `${runName}.raw.json`);
+    const rawText = JSON.stringify({ run: runName, created_at: out.created_at, responses: rawStore }, null, 2);
+    fs.writeFileSync(rawPath, rawText);
+    out.raw_file = `${runName}.raw.json`;
+    out.raw_sha256 = crypto.createHash('sha256').update(rawText).digest('hex');
+    console.log(`원본 응답: ${path.relative(process.cwd(), rawPath)}  (커밋 대상 아님 — .gitignore)`);
+  }
+
   /* 사진이 전부 실패한 run 은 저장하지 않는다 — 빈 run 파일이 진짜 run 과 헷갈린다 */
   const anyItems = Object.values(out.photos).some(p => (p.items || []).length);
   if (!DRY && !anyItems) {
@@ -323,11 +344,6 @@ async function main() {
     if (dumper) console.log(`   요청·응답 원본: ${path.relative(process.cwd(), dumper.dir)}`);
     process.exit(1);
   }
-  fs.mkdirSync(path.join(evalRoot, 'runs'), { recursive: true });
-  /* 파일명에 설정을 전부 넣는다 — 실패한 프로브 run 이 진짜 run 과 헷갈린 전례가 있다 */
-  const tags = [`crop${SLICES}`, MEDIA_RES, ...(PART_MEDIA_RES ? [`part_${PART_MEDIA_RES}`] : []),
-                ...(PER_CROP ? ['percrop'] : [])];
-  const outFile = path.join(evalRoot, 'runs', `${stamp}-${MODEL}-${PROMPT_VER}-${tags.join('-')}.json`);
   fs.writeFileSync(outFile, JSON.stringify(out, null, 2));
 
   const allDupes = Object.values(out.photos).flatMap(p => p.crop_duplicates || []);

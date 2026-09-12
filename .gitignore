@@ -5,6 +5,7 @@ dist/
 # runs/ 도 포함: 파싱 실패 시 모델 원문 응답(raw)에 지면 텍스트가 들어갈 수 있다
 eval/photos/
 eval/runs/
+eval/runs/*.raw.json
 eval/crops/
 eval/requests/
 eval/tmp_*.mjs
