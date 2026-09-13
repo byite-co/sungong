@@ -1,0 +1,30 @@
+#!/usr/bin/env sh
+# 모델 원본 응답(raw)이 커밋에 들어가는 것을 막는다.
+#
+#   .gitignore 는 `git add -f` 를 막지 못한다 — 무시 규칙을 무시하는 것이 -f 의 설계된 동작이다.
+#   실제로 raw 를 runs/ 안 형제 파일로 두었을 때 `git add -f eval/runs/` 가 raw 까지 스테이징했다.
+#   이 훅이 -f 를 실제로 막는 유일한 층이다.
+#
+# 연결(클론에 따라오지 않는다 — 저장소마다 한 번):
+#   git config core.hooksPath .githooks
+#
+# raw 에는 파싱 실패 시 지면 텍스트(저작물 + 학생 필기)가 그대로 들어갈 수 있다.
+# 이 저장소는 공개다. 통과시키면 되돌릴 수 없다.
+set -eu
+
+BAD=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '(^|/)runs_raw/|\.raw\.json$' || true)
+
+if [ -n "$BAD" ]; then
+  echo "⛔ 커밋 거부 — 모델 원본 응답(raw)이 스테이징돼 있습니다." >&2
+  echo "" >&2
+  echo "$BAD" | sed 's/^/    /' >&2
+  echo "" >&2
+  echo "  raw 에는 파싱 실패 시 지면 텍스트(저작물 + 학생 필기)가 들어갑니다." >&2
+  echo "  이 저장소는 공개입니다. --force 로 add 했더라도 커밋되지 않습니다." >&2
+  echo "" >&2
+  echo "  해제:  git restore --staged <위 경로>" >&2
+  echo "  run JSON 의 raw_file·raw_sha256 포인터만 커밋하세요." >&2
+  exit 1
+fi
+
+exit 0

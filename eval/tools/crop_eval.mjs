@@ -215,8 +215,9 @@ async function main() {
     photos: {},
   };
 
-  /* ★ 모델 원본 응답은 run JSON 이 아니라 형제 파일 runs/<run>.raw.json 으로 뺀다.
-     run JSON 에는 포인터(raw_file·raw_sha256)만 남는다 — read.mjs 와 같은 규율. */
+  /* ★ 모델 원본 응답은 run JSON 이 아니라 별도 디렉터리 runs_raw/<run>.raw.json 으로 뺀다.
+     run JSON 에는 포인터(raw_file·raw_sha256)만 남는다 — read.mjs 와 같은 규율.
+     형제 파일은 `git add -f eval/runs/` 를 막지 못해 폐기했다(.githooks/pre-commit 참조). */
   const rawStore = {};
   let calls = 0;
   for (const f of files) {
@@ -326,14 +327,16 @@ async function main() {
   const runName = `${stamp}-${MODEL}-${PROMPT_VER}-${tags.join('-')}`;
   const outFile = path.join(evalRoot, 'runs', `${runName}.json`);
 
-  /* 원본 응답 — 형제 파일. run JSON 보다 먼저 쓰고 sha256 을 포인터로 넣는다. */
+  /* 원본 응답 — runs/ 바깥의 별도 디렉터리. run JSON 보다 먼저 쓰고 sha256 을 포인터로 넣는다. */
   if (Object.keys(rawStore).length) {
-    const rawPath = path.join(evalRoot, 'runs', `${runName}.raw.json`);
+    const rawDir = path.join(evalRoot, 'runs_raw');
+    fs.mkdirSync(rawDir, { recursive: true });
+    const rawPath = path.join(rawDir, `${runName}.raw.json`);
     const rawText = JSON.stringify({ run: runName, created_at: out.created_at, responses: rawStore }, null, 2);
     fs.writeFileSync(rawPath, rawText);
-    out.raw_file = `${runName}.raw.json`;
+    out.raw_file = `runs_raw/${runName}.raw.json`;
     out.raw_sha256 = crypto.createHash('sha256').update(rawText).digest('hex');
-    console.log(`원본 응답: ${path.relative(process.cwd(), rawPath)}  (커밋 대상 아님 — .gitignore)`);
+    console.log(`원본 응답: ${path.relative(process.cwd(), rawPath)}  (커밋 대상 아님 — .gitignore + pre-commit 훅)`);
   }
 
   /* 사진이 전부 실패한 run 은 저장하지 않는다 — 빈 run 파일이 진짜 run 과 헷갈린다 */

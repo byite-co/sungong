@@ -88,8 +88,21 @@ export GEMINI_API_KEY=...           # 유료 티어!
 node read.mjs --photos photos       # 기본: gemini-3.1-flash-lite · media_res medium
 node read.mjs --media-res high      # 해상도 비교 (비용 3배 — 정확도 이득과 같이 잴 것)
 node read.mjs --provider anthropic --model claude-opus-5   # 교차 비교용
-# → runs/<시각>-<모델>-<프롬프트버전>.json
+# → runs/<시각>-<모델>-<프롬프트버전>.json          (커밋 대상 아님)
+# → runs_raw/<같은 이름>.raw.json                  (모델 원본 응답 — 절대 커밋 금지)
 ```
+
+### ⚠️ 저장소를 클론했으면 먼저 이 한 줄 (훅은 클론에 따라오지 않는다)
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`.githooks/pre-commit` 이 `runs_raw/` 와 `*.raw.json` 의 커밋을 거부합니다.
+**`.gitignore` 로는 못 막습니다** — `git add -f` 는 무시 규칙을 무시하는 것이 설계된 동작이고,
+실제로 raw 를 `runs/` 안 형제 파일로 두었을 때 `git add -f eval/runs/` 가 raw 까지 스테이징했습니다.
+raw 에는 파싱 실패 시 지면 텍스트(저작물 + 학생 필기)가 들어갑니다. 이 저장소는 공개입니다.
+run JSON 에는 `raw_file`·`raw_sha256` 포인터만 남습니다.
 
 - `temperature: 0` 고정 — 프롬프트 효과와 샘플링 노이즈를 분리하기 위해
 - `media_resolution` 명시 고정 — 실행 간 토큰이 흔들리지 않게

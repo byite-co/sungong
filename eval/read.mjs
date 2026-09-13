@@ -485,10 +485,13 @@ if (TEXT_BASELINE) {
   }
 }
 
-/* ★ 모델 원본 응답은 run JSON 에 넣지 않고 형제 파일 runs/<run>.raw.json 으로 뺀다.
+/* ★ 모델 원본 응답은 run JSON 에 넣지 않고 별도 디렉터리 runs_raw/<run>.raw.json 으로 뺀다.
    run JSON 에는 포인터(raw_file·raw_sha256)만 남는다.
-   이유: raw 에는 지면 텍스트가 섞일 수 있다. run JSON 을 git add -f 로 커밋하는 일이
-   있어도 raw 는 구조적으로 따라가지 않는다(.gitignore 의 eval/runs/*.raw.json). */
+   이유: raw 에는 지면 텍스트가 섞일 수 있다.
+   ⚠️ 형제 파일(runs/<run>.raw.json)로는 막지 못했다 — `git add -f eval/runs/` 는
+   .gitignore 를 무시하는 것이 설계된 동작이라 raw 까지 딸려 들어간다.
+   그래서 (a) 디렉터리를 분리하고 (b) .githooks/pre-commit 으로 실제 차단한다.
+   훅이 유일하게 -f 를 막는 층이다 — .gitignore 는 못 막는다. */
 const rawStore = {};
 
 for (const f of files) {
@@ -539,14 +542,17 @@ const tags = PROVIDER === 'gemini'
 const runName = `${stamp}-${MODEL}-${PROMPT_VER}${tags.length ? '-' + tags.join('-') : ''}`;
 const outFile = path.join(here, 'runs', `${runName}.json`);
 
-/* 원본 응답 — 형제 파일. run JSON 보다 먼저 쓰고 sha256 을 포인터로 넣는다. */
+/* 원본 응답 — runs/ 바깥의 별도 디렉터리. run JSON 보다 먼저 쓰고 sha256 을 포인터로 넣는다.
+   포인터는 eval/ 기준 상대경로라서 runs/ 만 복사해 가도 raw 가 따라오지 않는다. */
 if (Object.keys(rawStore).length) {
-  const rawPath = path.join(here, 'runs', `${runName}.raw.json`);
+  const rawDir = path.join(here, 'runs_raw');
+  fs.mkdirSync(rawDir, { recursive: true });
+  const rawPath = path.join(rawDir, `${runName}.raw.json`);
   const rawText = JSON.stringify({ run: runName, created_at: out.created_at, responses: rawStore }, null, 2);
   fs.writeFileSync(rawPath, rawText);
-  out.raw_file = `${runName}.raw.json`;
+  out.raw_file = `runs_raw/${runName}.raw.json`;
   out.raw_sha256 = crypto.createHash('sha256').update(rawText).digest('hex');
-  console.log(`원본 응답: ${path.relative(process.cwd(), rawPath)}  (커밋 대상 아님 — .gitignore)`);
+  console.log(`원본 응답: ${path.relative(process.cwd(), rawPath)}  (커밋 대상 아님 — .gitignore + pre-commit 훅)`);
 }
 
 /* 사진이 전부 실패한 run 은 저장하지 않는다 — 실패한 ULTRA_HIGH 프로브가 문항 0개짜리
