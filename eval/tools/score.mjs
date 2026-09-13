@@ -68,23 +68,52 @@ function loadRun(p) {
   return { map: m, dups, raw: out.length, dropped, droppedBy };
 }
 
-// 라벨: "파일명,번호,mark" 한 줄에 하나
-const truth = new Map();        // 채점 대상
-const excluded = new Map();     // 채점 제외 → key -> { kind, raw }
+/* 라벨: "파일명,번호,mark[,work]" 한 줄에 하나. 3열 파일도 계속 읽힌다.
+   work 는 s|b|p 와 solved|blank|partial 둘 다 허용.
+   work 가 x·판독불가면 **work 채점에서만** 제외한다 — mark 채점에는 영향이 없다. */
+const WORK_ALIAS = { s: 'solved', b: 'blank', p: 'partial',
+                     solved: 'solved', blank: 'blank', partial: 'partial' };
+const WORK_SKIP = new Set(['x', '판독불가', 'unreadable', '']);
+const WORKS = ['solved', 'blank', 'partial'];
+
+const truth = new Map();        // mark 채점 대상
+const excluded = new Map();     // mark 채점 제외 → key -> { kind, raw }
+const truthWork = new Map();    // work 채점 대상 (mark 제외와 독립)
+const workSkipped = new Map();  // work 채점 제외 → key -> raw
 for (const line of fs.readFileSync(labelPath, 'utf8').split(/\r?\n/)) {
   const t = line.trim();
   if (!t || t.startsWith('#')) continue;
-  const [f, n, m] = t.split(',').map((x) => x.trim());
+  const [f, n, m, w] = t.split(',').map((x) => (x ?? '').trim());
   if (!f || !n || !m) { console.error('무시한 줄: ' + t); continue; }
   const key = f.split(/[\\/]/).pop() + ' ' + n;
-  const kind = EXCLUDE_KIND[m.trim().toLowerCase()];
-  if (kind) excluded.set(key, { kind, raw: m.trim() });
+  const kind = EXCLUDE_KIND[m.toLowerCase()];
+  if (kind) excluded.set(key, { kind, raw: m });
   else truth.set(key, norm(m));
+  if (w !== undefined && w !== '') {
+    const lw = w.toLowerCase();
+    if (WORK_SKIP.has(lw)) workSkipped.set(key, w);
+    else if (WORK_ALIAS[lw]) truthWork.set(key, WORK_ALIAS[lw]);
+    else console.error(`알 수 없는 work 값 무시: ${w} (${key})`);
+  }
 }
 const labelTotal = truth.size + excluded.size;
 
-const runs = [{ label: path.basename(runPath).replace(/\.json$/, ''), ...loadRun(runPath) }];
-if (cmpPath) runs.unshift({ label: path.basename(cmpPath).replace(/\.json$/, ''), ...loadRun(cmpPath) });
+/* work 는 walk() 가 보지 않는다(MARK_KEYS 만 본다). run JSON 의 photos 구조에서 직접 읽는다. */
+function loadWork(p) {
+  const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const m = new Map();
+  for (const [f, ph] of Object.entries(j.photos || {}))
+    for (const it of (ph.items || [])) {
+      const key = f.split(/[\\/]/).pop() + ' ' + it.item_no;
+      if (!m.has(key)) m.set(key, { work: WORK_ALIAS[String(it.work ?? '').toLowerCase()] ?? null,
+                                    wc: it.work_confidence ?? null,
+                                    mark: norm(it.mark) });
+    }
+  return m;
+}
+
+const runs = [{ label: path.basename(runPath).replace(/\.json$/, ''), ...loadRun(runPath), work: loadWork(runPath) }];
+if (cmpPath) runs.unshift({ label: path.basename(cmpPath).replace(/\.json$/, ''), ...loadRun(cmpPath), work: loadWork(cmpPath) });
 
 const L = []; const say = (s = '') => L.push(s);
 const pct = (n, d) => (d === 0 ? 'n/a' : ((n / d) * 100).toFixed(1) + '%');
@@ -94,6 +123,9 @@ for (const v of truth.values()) tDist[v] = (tDist[v] ?? 0) + 1;
 const major = Object.entries(tDist).sort((a, b) => b[1] - a[1])[0];
 
 say('# 채점 결과');
+say('');
+const WARN_SLOT = L.length;     // 상단 경고를 나중에 여기에 끼워 넣는다
+const warnings = [];
 say('');
 const pageSet = new Set([...truth.keys(), ...excluded.keys()].map((k) => k.split(' ')[0]));
 say('라벨 ' + labelTotal + '문항 · ' + pageSet.size + '장');
@@ -218,6 +250,104 @@ for (const r of runs) {
     say('');
     for (const k of halluc) say('- `' + k + '`  읽음 ' + r.map.get(k).mark);
   }
+
+  /* ── work 3분류 채점 ─────────────────────────────────────────────────────
+     방향별로 나눠 센다. 한 숫자로 뭉치면 어느 쪽 오류인지 알 수 없다. */
+  if (truthWork.size) {
+    const wKeys = [...truthWork.keys()];
+    const wPred = (k) => r.work.get(k)?.work ?? null;
+    const wOk = wKeys.filter((k) => wPred(k) === truthWork.get(k));
+    const wAcc = wOk.length / wKeys.length;
+
+    /* ★ 다수클래스 기준선 — 게이트보다 먼저 본다.
+       게이트가 기준선보다 낮으면 그 게이트는 무의미하다. */
+    const wDist = {};
+    for (const v of truthWork.values()) wDist[v] = (wDist[v] ?? 0) + 1;
+    const wMajor = Object.entries(wDist).sort((a, b) => b[1] - a[1])[0];
+    const wBase = wMajor[1] / wKeys.length;
+
+    say('### work 3분류');
+    say('');
+    say('| 지표 | 값 | 기준 |');
+    say('|---|---:|---:|');
+    say('| work 3분류 정확도 | **' + pct(wOk.length, wKeys.length) + '** (' + wOk.length + '/' + wKeys.length + ') | ≥ 90% (게이트) |');
+    say('| **다수클래스 기준선** (전부 `' + wMajor[0] + '`) | **' + pct(wMajor[1], wKeys.length) + '** | — |');
+    say('| 기준선 대비 | ' + ((wAcc - wBase) * 100).toFixed(1) + '%p | > 0 |');
+    if (workSkipped.size) say('| work 채점 제외 (x·판독불가) | ' + workSkipped.size + '문항 | — |');
+    say('');
+    if (wAcc < wBase) {
+      const msg = '⚠️ **work 기준선 미달 — 이 지표로는 모델이 무작위 추측보다 못하다** ' +
+        '(정확도 ' + pct(wOk.length, wKeys.length) + ' < 기준선 ' + pct(wMajor[1], wKeys.length) + ', run `' + r.label + '`)';
+      warnings.push(msg);
+      say(msg);
+      say('');
+    }
+    if (wBase >= 0.90) {
+      const msg2 = '⚠️ **work 게이트(90%)가 다수클래스 기준선(' + pct(wMajor[1], wKeys.length) + ')보다 낮다 — 이 게이트는 무의미하다.** ' +
+        '전부 `' + wMajor[0] + '` 이라고 답해도 게이트를 통과한다.';
+      if (!warnings.includes(msg2)) warnings.push(msg2);
+      say(msg2);
+      say('');
+    }
+
+    say('**방향별 오판** — 한 숫자로 뭉치지 않는다');
+    say('');
+    say('| 방향 | 건수 | 비율 (해당 라벨 기준) |');
+    say('|---|---:|---:|');
+    for (const a of WORKS) for (const b of WORKS) {
+      if (a === b) continue;
+      const n = wKeys.filter((k) => truthWork.get(k) === a && wPred(k) === b).length;
+      const d = wKeys.filter((k) => truthWork.get(k) === a).length;
+      if (n || d) say('| ' + a + ' → ' + b + ' | ' + n + ' | ' + pct(n, d) + ' |');
+    }
+    const wMiss = wKeys.filter((k) => wPred(k) === null).length;
+    if (wMiss) say('| (출력 없음) | ' + wMiss + ' | ' + pct(wMiss, wKeys.length) + ' |');
+    say('');
+
+    const predBlank = wKeys.filter((k) => wPred(k) === 'blank').length;
+    const truthBlank = wKeys.filter((k) => truthWork.get(k) === 'blank').length;
+    say('**blank 비율** — 모델 ' + pct(predBlank, wKeys.length) + ' (' + predBlank + '/' + wKeys.length + ')' +
+        ' · 라벨 ' + pct(truthBlank, wKeys.length) + ' (' + truthBlank + '/' + wKeys.length + ')');
+    say('');
+
+    /* mark × work 6×3 교차표 (모델 예측 기준) — circle×blank 가 fn_flag_pages 발화 조건 */
+    say('**mark × work 교차표 (모델 예측 기준)**');
+    say('');
+    say('| mark＼work | ' + WORKS.join(' | ') + ' | 합 |');
+    say('|---|' + WORKS.map(() => '---:').join('|') + '|---:|');
+    let cxb = 0;
+    for (const m of MARKS) {
+      const cells = WORKS.map((w) => wKeys.filter((k) => r.work.get(k)?.mark === m && wPred(k) === w).length);
+      const sum = cells.reduce((a, b) => a + b, 0);
+      if (!sum) continue;
+      if (m === 'circle') cxb = cells[WORKS.indexOf('blank')];
+      say('| **' + m + '** | ' + cells.map((n, i) =>
+        (m === 'circle' && WORKS[i] === 'blank') ? '**★ ' + n + '**' : (n || '·')).join(' | ') + ' | ' + sum + ' |');
+    }
+    say('');
+    const cxbTruth = wKeys.filter((k) => truth.get(k) === 'circle' && truthWork.get(k) === 'blank').length;
+    say('★ **circle × blank = ' + cxb + '건** (모델) vs **' + cxbTruth + '건** (사람 라벨).');
+    say('`fn_flag_pages` 가 "확인할 게 있어요" 를 띄우는 조건이다 — 이 차이가 그대로 오탐이 된다.');
+    say('');
+
+    /* work_confidence 구간별 — 오답이 어느 구간에 몰리는지 */
+    say('**work_confidence 구간별**');
+    say('');
+    say('| 구간 | 건수 | 그중 오답 | 오답률 |');
+    say('|---|---:|---:|---:|');
+    const bands = [[1.0, 1.01, '1.0'], [0.9, 1.0, '0.9–0.99'], [0.7, 0.9, '0.7–0.89'],
+                   [0.5, 0.7, '0.5–0.69'], [0, 0.5, '< 0.5']];
+    for (const [lo, hi, name] of bands) {
+      const inBand = wKeys.filter((k) => { const c = r.work.get(k)?.wc; return c != null && c >= lo && c < hi; });
+      if (!inBand.length) continue;
+      const bad = inBand.filter((k) => wPred(k) !== truthWork.get(k)).length;
+      say('| ' + name + ' | ' + inBand.length + ' | ' + bad + ' | ' + pct(bad, inBand.length) + ' |');
+    }
+    const noConf = wKeys.filter((k) => r.work.get(k)?.wc == null).length;
+    if (noConf) say('| (confidence 없음) | ' + noConf + ' | — | — |');
+    say('');
+  }
+
   if (excluded.size) {
     say('');
     say('### 참고 — 채점 제외 문항에 이 run 이 낸 값 (정확도에 반영되지 않음)');
@@ -247,6 +377,7 @@ if (runs.length === 2) {
   say('> **두 값의 차이를 근거로 어느 쪽이 낫다고 결론짓지 말 것.** 큰 차이만 읽는다.');
 }
 
+if (warnings.length) L.splice(WARN_SLOT, 0, ...warnings, '');
 const text = L.join('\n');
 console.log(text);
 fs.mkdirSync('results', { recursive: true });

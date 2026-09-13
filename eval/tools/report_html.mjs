@@ -57,6 +57,10 @@ function walk(node, file, out, parentKey) {
       const wk = pick(node, WORK_KEYS), ck = pick(node, CONF_KEYS);
       out.push({
         file: f ?? 'UNKNOWN', num, mark: norm(node[mk], ALIAS),
+        work: (() => { const w = String(node.work ?? '').toLowerCase();
+          return ({ s: 'solved', b: 'blank', p: 'partial',
+                    solved: 'solved', blank: 'blank', partial: 'partial' })[w] ?? null; })(),
+        work_confidence: node.work_confidence ?? null,
         work: wk ? norm(node[wk], WORKMAP) : null,
         conf: ck ? Number(node[ck]) : null,
       });
@@ -98,16 +102,21 @@ for (const f of files) {
     items: nums.map((n) => {
       const a = A ? A.get(f + ' ' + n) : null;
       const b = B.get(f + ' ' + n);
-      return { num: n, a, b, mismatch: !!(a && b && a.mark !== b.mark) };
+      const mmMark = !!(a && b && a.mark !== b.mark);
+      const mmWork = !!(a && b && a.work && b.work && a.work !== b.work);
+      return { num: n, a, b, mismatch: mmMark || mmWork, mmMark, mmWork };
     }),
   });
 }
 const nMismatch = rows.reduce((s, r) => s + r.items.filter((i) => i.mismatch).length, 0);
+const nMmMark = rows.reduce((s, r) => s + r.items.filter((i) => i.mmMark).length, 0);
+const nMmWork = rows.reduce((s, r) => s + r.items.filter((i) => i.mmWork).length, 0);
 const nItems = rows.reduce((s, r) => s + r.items.length, 0);
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const cell = (x) => x
   ? '<span class="g">' + (GLYPH[x.mark] ?? '?') + '</span><span class="n">' + esc(x.mark) + '</span>'
+    + (x.work ? '<span class="wk w-' + esc(x.work) + '">' + esc(x.work) + '</span>' : '')
     + (x.conf != null && !Number.isNaN(x.conf) ? '<span class="c">' + x.conf + '</span>' : '')
   : '<span class="none">없음</span>';
 
@@ -127,7 +136,8 @@ const body = rows.map((r) => {
     + (A ? '<th>' + esc(labelA) + '</th>' : '')
     + '<th>' + esc(labelB) + '</th><th>종이의 실제</th></tr></thead><tbody>'
     + r.items.map((i) =>
-      '<tr class="' + (i.mismatch ? 'mm' : '') + '" data-file="' + esc(r.file) + '" data-num="' + esc(i.num) + '">'
+      '<tr class="' + [i.mismatch ? 'mm' : '', i.mmMark ? 'mm-mark' : '', i.mmWork ? 'mm-work' : ''].filter(Boolean).join(' ')
+        + '" data-file="' + esc(r.file) + '" data-num="' + esc(i.num) + '">'
       + '<td class="num">' + esc(i.num) + '</td>'
       + (A ? '<td>' + cell(i.a) + '</td>' : '')
       + '<td>' + cell(i.b) + '</td>'
@@ -171,6 +181,17 @@ const CSS = [
   'select.truth.set{border-color:var(--acc);font-weight:600}',
   'body.only-mm tr:not(.mm){display:none}',
   'body.only-mm section.page.empty{display:none}',
+  /* mark 불일치와 work 불일치를 다른 색으로 — 한 색으로 뭉치면 어느 축인지 모른다 */
+  'tr.mm-mark td{background:rgba(220,80,60,.13)}',
+  'tr.mm-work td{box-shadow:inset 3px 0 0 #5b8cd6}',
+  'tr.mm-mark.mm-work td{background:rgba(220,80,60,.13);box-shadow:inset 3px 0 0 #5b8cd6}',
+  '.wk{display:inline-block;margin-left:6px;padding:1px 5px;border-radius:4px;font-size:11px;border:1px solid var(--line);color:var(--mut)}',
+  '.wk.w-blank{border-color:#5b8cd6;color:#5b8cd6;font-weight:600}',
+  '.wk.w-partial{border-color:#c98a2e;color:#c98a2e;font-weight:600}',
+  'body.only-mark tr:not(.mm-mark){display:none}',
+  'body.only-mark section.page.empty-mark{display:none}',
+  'body.only-work tr:not(.mm-work){display:none}',
+  'body.only-work section.page.empty-work{display:none}',
   '#out{position:fixed;inset:auto 0 0 0;background:var(--card);border-top:1px solid var(--line);padding:12px 16px;max-height:38vh;overflow:auto;display:none}',
   '#out textarea{width:100%;height:150px;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:8px}',
 ].join('\n');
@@ -186,13 +207,33 @@ const JS = [
   'sels.forEach(function(s){ s.addEventListener("change", refresh); });',
   'var tgl = document.getElementById("tgl");',
   'if (tgl) tgl.addEventListener("click", function(){',
+  '  document.body.classList.remove("only-mark","only-work");',
   '  document.body.classList.toggle("only-mm");',
   '  var on = document.body.classList.contains("only-mm");',
   '  tgl.textContent = on ? "전체 보기" : "불일치만 보기";',
+  '  var bm = document.getElementById("tglMark"); if (bm) bm.textContent = "mark 불일치만";',
+  '  var bw = document.getElementById("tglWork"); if (bw) bw.textContent = "work 불일치만";',
   '  [].forEach.call(document.querySelectorAll("section.page"), function(sec){',
   '    sec.classList.toggle("empty", sec.querySelectorAll("tr.mm").length === 0);',
   '  });',
   '});',
+  'function only(btnId, cls, rowSel, emptyCls, onText, offText){',
+  '  var b = document.getElementById(btnId); if (!b) return;',
+  '  b.addEventListener("click", function(){',
+  '    ["only-mm","only-mark","only-work"].forEach(function(c){ if (c !== cls) document.body.classList.remove(c); });',
+  '    var on = document.body.classList.toggle(cls);',
+  '    b.textContent = on ? onText : offText;',
+  '    ["tgl","tglMark","tglWork"].forEach(function(id){',
+  '      if (id === btnId) return; var o = document.getElementById(id); if (!o) return;',
+  '      o.textContent = id === "tgl" ? "불일치만 보기" : (id === "tglMark" ? "mark 불일치만" : "work 불일치만");',
+  '    });',
+  '    [].forEach.call(document.querySelectorAll("section.page"), function(sec){',
+  '      sec.classList.toggle(emptyCls, sec.querySelectorAll(rowSel).length === 0);',
+  '    });',
+  '  });',
+  '}',
+  'only("tglMark","only-mark","tr.mm-mark","empty-mark","전체 보기","mark 불일치만");',
+  'only("tglWork","only-work","tr.mm-work","empty-work","전체 보기","work 불일치만");',
   'document.getElementById("copy").addEventListener("click", function(){',
   '  var lines = [];',
   '  sels.forEach(function(s){',
@@ -215,9 +256,11 @@ const html = '<title>판독 보고서 ' + ts + '</title>\n<style>\n' + CSS + '\n
   + '<header><h1>판독 보고서</h1>'
   + '<div class="meta">' + esc(labelB) + (labelA ? ' · 비교 ' + esc(labelA) : '')
   + ' · 사진 ' + rows.length + '장 · 문항 ' + nItems + '개'
-  + (A ? ' · <b>불일치 ' + nMismatch + '개</b>' : '') + '</div>'
+  + (A ? ' · <b>불일치 ' + nMismatch + '개</b> (mark ' + nMmMark + ' · work ' + nMmWork + ')' : '') + '</div>'
   + '<div class="bar">'
-  + (A ? '<button id="tgl">불일치만 보기</button>' : '')
+  + (A ? '<button id="tgl">불일치만 보기</button>'
+       + '<button id="tglMark">mark 불일치만</button>'
+       + '<button id="tglWork">work 불일치만</button>' : '')
   + '<button id="copy" class="primary">정정 복사</button>'
   + '<span class="count" id="cnt">0개 입력됨</span>'
   + '</div></header>\n'
